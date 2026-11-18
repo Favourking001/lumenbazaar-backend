@@ -2,6 +2,14 @@ import { z } from "zod";
 import type { SettlementStatus, NetworkId } from "./models.js";
 
 /**
+ * Clock interface for injectable time sources (testing only).
+ * In production, always uses real Date.now().
+ */
+export interface Clock {
+  now(): number;
+}
+
+/**
  * Webhook event schema version.
  * Increment this whenever the payload structure changes materially.
  * Receivers should validate this and reject unknown versions.
@@ -140,6 +148,14 @@ export function buildWebhookPayload(
 }
 
 /**
+ * Webhook signature verification result.
+ * Distinguishes error types for clock-skew analysis (fail-closed).
+ */
+export type WebhookSignatureVerificationResult = 
+  | { valid: true }
+  | { valid: false; errorType: "stale" | "future" | "indeterminate"; reason: string };
+
+/**
  * HMAC-SHA256 signature configuration.
  */
 export const WEBHOOK_SIGNATURE_ALGORITHM = "sha256";
@@ -186,44 +202,110 @@ export function computeWebhookSignature(
 
 /**
  * Verify webhook signature using constant-time comparison to prevent timing attacks.
+ * With injectable clock for clock-skew testing and error type distinction.
  *
  * @param secret - Webhook secret (must match the one used to create signature)
  * @param timestamp - ISO 8601 timestamp from header
  * @param rawBody - Raw JSON body as received
  * @param signature - Hex-encoded signature from header
- * @param replayWindowSeconds - Maximum age of timestamp (default 5 minutes)
- * @returns true if signature is valid and timestamp is within replay window
+ * @param replayWindowSeconds - Maximum age of timestamp (default 5 minutes = 300 seconds)
+ * @param clock - Optional injected clock for testing; defaults to real Date.now()
+ * @returns WebhookSignatureVerificationResult with error type distinction (fail-closed)
+ *
+ * Error types:
+ * - "stale": Timestamp is older than replay window (ageSeconds > replayWindowSeconds)
+ * - "future": Timestamp is in the future (ageSeconds < 0)
+ * - "indeterminate": Signature/format invalid, or signature mismatch (fail-closed)
+ *
+ * @example
+ * // Production: uses real clock
+ * const result = verifyWebhookSignature(secret, timestamp, body, sig, 300);
+ * if (result.valid) { ... }
+ *
+ * @example
+ * // Testing with clock skew
+ * const clock = createFakeClock(Date.now() + 301000); // 301 seconds ahead
+ * const result = verifyWebhookSignature(secret, timestamp, body, sig, 300, clock);
+ * if (!result.valid && result.errorType === "stale") { ... }
  */
 export function verifyWebhookSignature(
   secret: string,
   timestamp: string,
   rawBody: string,
   signature: string,
-  replayWindowSeconds: number = 300
-): boolean {
+  replayWindowSeconds: number = 300,
+  clock?: Clock
+): WebhookSignatureVerificationResult {
   const crypto = require("crypto");
 
-  // Verify timestamp is within replay window
+  // Get current time (injectable clock or real time)
+  const nowTime = clock?.now() ?? Date.now();
+
+  // Parse and validate timestamp
   const receivedTime = new Date(timestamp);
   if (isNaN(receivedTime.getTime())) {
-    return false;
+    return {
+      valid: false,
+      errorType: "indeterminate",
+      reason: "Timestamp is not valid ISO 8601 format"
+    };
   }
 
-  const nowTime = new Date();
-  const ageSeconds = (nowTime.getTime() - receivedTime.getTime()) / 1000;
+  const receivedTimeMs = receivedTime.getTime();
+  const ageSeconds = (nowTime - receivedTimeMs) / 1000;
 
-  if (ageSeconds < 0 || ageSeconds > replayWindowSeconds) {
-    return false;
+  // Distinguish time-based errors
+  if (ageSeconds > replayWindowSeconds) {
+    return {
+      valid: false,
+      errorType: "stale",
+      reason: `Timestamp is older than replay window (${ageSeconds.toFixed(1)}s > ${replayWindowSeconds}s)`
+    };
+  }
+
+  if (ageSeconds < 0) {
+    return {
+      valid: false,
+      errorType: "future",
+      reason: `Timestamp is in the future (${Math.abs(ageSeconds).toFixed(1)}s ahead)`
+    };
   }
 
   // Compute expected signature
-  const expectedSignature = computeWebhookSignature(secret, timestamp, rawBody);
+  let expectedSignature: string;
+  try {
+    expectedSignature = computeWebhookSignature(secret, timestamp, rawBody);
+  } catch {
+    return {
+      valid: false,
+      errorType: "indeterminate",
+      reason: "Failed to compute expected signature"
+    };
+  }
 
   // Constant-time comparison to prevent timing attacks
-  return crypto.timingSafeEqual(
-    Buffer.from(signature, "hex"),
-    Buffer.from(expectedSignature, "hex")
-  );
+  try {
+    const signatureMatch = crypto.timingSafeEqual(
+      Buffer.from(signature, "hex"),
+      Buffer.from(expectedSignature, "hex")
+    );
+
+    if (!signatureMatch) {
+      return {
+        valid: false,
+        errorType: "indeterminate",
+        reason: "Signature does not match expected value"
+      };
+    }
+  } catch {
+    return {
+      valid: false,
+      errorType: "indeterminate",
+      reason: "Invalid signature format (must be hex-encoded)"
+    };
+  }
+
+  return { valid: true };
 }
 
 /**

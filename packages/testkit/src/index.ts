@@ -1,5 +1,10 @@
 export const testkitPackage = "@lumenbazaar/testkit";
 
+// Clock exports
+export { realClock, createFakeClock, createClockWithSkew } from "./clock.js";
+export type { Clock } from "./clock.js";
+export { FakeClock } from "./clock.js";
+
 // Database exports
 export * from "./database.js";
 

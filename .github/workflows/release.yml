@@ -31,10 +31,15 @@ jobs:
     name: Build & Publish Release Artifacts
     needs: malware-scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      packages: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -65,11 +70,58 @@ jobs:
           pnpm openapi:generate
           echo "Generated release artifacts for commit ${RELEASE_COMMIT}"
 
+      - name: Generate SBOM (Software Bill of Materials)
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          node scripts/generate-sbom.mjs
+          echo "Generated CycloneDX and SPDX SBOMs"
+
+      - name: Generate checksums for all release artifacts
+        run: |
+          mkdir -p docs/release
+          cd docs/api
+          sha256sum openapi.json openapi.md conformance.json conformance.md checksums.json > checksums.sha256
+          cd ../..
+          echo "Generated SHA-256 checksums"
+
       - name: Verify artifact checksums
         run: |
           cd docs/api
           sha256sum -c checksums.sha256
           cd ../..
+
+      - name: Verify release attestations (SBOM, checksums, provenance)
+        run: |
+          node scripts/verify-release-attestations.mjs
+
+      - name: Generate provenance attestation for artifacts
+        uses: actions/attest-build-provenance@5e540f2b55860ae1dd4f5e82f45f9bf26758bcc4 # v1.4.3
+        with:
+          subject-path: |
+            docs/api/openapi.json
+            docs/api/openapi.md
+            docs/api/conformance.json
+            docs/api/conformance.md
+            docs/api/checksums.json
+            docs/api/checksums.sha256
+
+      - name: Record toolchain metadata
+        run: |
+          mkdir -p docs/release
+          cat > docs/release/toolchain-metadata-${{ github.sha }}.json << 'EOF'
+          {
+            "buildRunner": "ubuntu-latest",
+            "nodeVersion": "24",
+            "pnpmVersion": "10.28.0",
+            "buildDate": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "gitCommit": "${{ github.sha }}",
+            "gitRef": "${{ github.ref }}",
+            "workflowId": "${{ github.workflow_ref }}",
+            "actionBuildId": "${{ github.run_id }}"
+          }
+          EOF
+          echo "Recorded toolchain metadata"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -82,6 +134,8 @@ jobs:
             docs/api/conformance.md
             docs/api/checksums.json
             docs/api/checksums.sha256
+            docs/release/sbom-*.json
+            docs/release/toolchain-metadata-*.json
           retention-days: 90
 
       - name: Publish GitHub Release (tags only)
@@ -95,4 +149,6 @@ jobs:
             docs/api/conformance.md
             docs/api/checksums.json
             docs/api/checksums.sha256
+            docs/release/sbom-*.json
+            docs/release/toolchain-metadata-*.json
           generate_release_notes: true

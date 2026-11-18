@@ -15,7 +15,10 @@
     "backup:reconcile": "tsx scripts/reconcile-backup.ts",
     "backup:drill": "tsx scripts/backup-recovery-drill.ts",
     "build": "pnpm prisma:generate && pnpm typecheck",
-    "check": "pnpm prisma:generate && pnpm openapi:check && pnpm error-catalog:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm prisma:validate",
+    "check": "pnpm prisma:generate && pnpm openapi:check && pnpm error-catalog:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm prisma:validate && pnpm sbom:verify",
+    "sbom:generate": "node scripts/generate-sbom.mjs",
+    "sbom:verify": "node scripts/verify-release-attestations.mjs",
+    "sbom:verify:test": "node --test scripts/verify-release-attestations.test.mjs",
     "dev:api": "tsx apps/api/src/main.ts",
     "dev:mcp": "tsx apps/mcp-server/src/main.ts",
     "dev:worker": "tsx apps/worker/src/main.ts",
@@ -77,7 +80,8 @@
     "tsx": "4.20.6",
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.0",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "yaml": "2.6.1"
   },
   "pnpm": {
     "overrides": {
