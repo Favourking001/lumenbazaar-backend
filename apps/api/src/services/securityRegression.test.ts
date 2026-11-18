@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig, localIssuerPublicKey } from "@lumenbazaar/shared";
 import {
   createTestPaymentRequest,
+  stubQuoteSettlementFee,
   testExpiredPaymentRequest,
   testPaymentConfigEnv,
   testSeller
@@ -227,6 +228,7 @@ function acceptingAdapter(): X402StellarAdapter {
         valid: true,
         adapter: "@x402/stellar"
       };
-    }
+    },
+    quoteSettlementFee: stubQuoteSettlementFee
   };
 }

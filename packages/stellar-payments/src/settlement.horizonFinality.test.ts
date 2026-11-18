@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { type AppConfig } from "@lumenbazaar/shared";
+import { stubQuoteSettlementFee } from "@lumenbazaar/testkit";
 import { SettlementService } from "./settlement.js";
 import { InMemoryPaymentAttemptStore } from "./paymentAttemptStore.js";
 import { InMemorySettlementStore } from "./settlementStore.js";
@@ -31,7 +32,9 @@ describe("Settlement with Horizon Finality Verification", () => {
       },
       settlement: {
         maxTransactionFeeStroops: 100_000,
-        inclusionFeeStroops: 1000
+        inclusionFeeStroops: 1000,
+        feeCeilingStroops: 100_000,
+        feeCeilingOverrideEnabled: false
       },
       redisUrl: "redis://localhost:6379"
     } as AppConfig;
@@ -45,6 +48,7 @@ describe("Settlement with Horizon Finality Verification", () => {
       async verifyExact() {
         return { valid: true, adapter: "@x402/stellar" };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact(): Promise<X402SettlementResult> {
         return {
           status: "confirmed",
@@ -66,8 +70,7 @@ describe("Settlement with Horizon Finality Verification", () => {
   it("should create settlement with confirmed status after RPC finality", async () => {
     // Create a verified payment attempt
     await attemptStore.createVerifiedAttempt({
-      paymentHash:
-        "abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+      paymentHash: "abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
       network: "testnet",
       assetCode: "USDC",
       assetIssuer: "GATEMHCCKCY67ZUCKTROYN24ZYT5GK4EQZ65JJLDHKHRUZI3EUEKMTCH",
@@ -117,8 +120,7 @@ describe("Settlement with Horizon Finality Verification", () => {
   it("should handle RPC timeout gracefully and record failed settlement", async () => {
     // Create a verified payment attempt
     await attemptStore.createVerifiedAttempt({
-      paymentHash:
-        "xyz789uvw123xyz789uvw123xyz789uvw123xyz789uvw123xyz789uvw123xyz7",
+      paymentHash: "xyz789uvw123xyz789uvw123xyz789uvw123xyz789uvw123xyz789uvw123xyz7",
       network: "testnet",
       assetCode: "USDC",
       assetIssuer: "GATEMHCCKCY67ZUCKTROYN24ZYT5GK4EQZ65JJLDHKHRUZI3EUEKMTCH",
@@ -133,6 +135,7 @@ describe("Settlement with Horizon Finality Verification", () => {
       async verifyExact() {
         return { valid: true, adapter: "@x402/stellar" };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact(): Promise<X402SettlementResult> {
         return {
           status: "timed_out",
@@ -169,18 +172,18 @@ describe("Settlement with Horizon Finality Verification", () => {
     };
 
     // Settlement should fail with timeout status
-    await expect(timeoutService.settle(settlementRequest)).rejects.toThrow(
-      "SETTLEMENT_FAILED"
-    );
+    await expect(timeoutService.settle(settlementRequest)).rejects.toThrow("SETTLEMENT_FAILED");
 
     // Verify settlement was recorded with timed_out status
-    const settlement = await settlementStore.getSettlementByTransactionHash("timeout_tx_hash", "stellar:testnet");
+    const settlement = await settlementStore.getSettlementByTransactionHash(
+      "timeout_tx_hash",
+      "stellar:testnet"
+    );
     expect(settlement?.status).toBe("timed_out");
   });
 
   it("should prevent idempotent resubmission of settlement", async () => {
-    const paymentHash =
-      "idempotent_abc123def456abc123def456abc123def456abc123def456abc123de";
+    const paymentHash = "idempotent_abc123def456abc123def456abc123def456abc123def456abc123de";
 
     // Create first verified attempt
     await attemptStore.createVerifiedAttempt({
@@ -225,8 +228,7 @@ describe("Settlement with Horizon Finality Verification", () => {
 
   it("should mark settlement as requiring review if on-chain verification fails", async () => {
     await attemptStore.createVerifiedAttempt({
-      paymentHash:
-        "failed_verification_123failed_verification_123failed_verification_1",
+      paymentHash: "failed_verification_123failed_verification_123failed_verification_1",
       network: "testnet",
       assetCode: "USDC",
       assetIssuer: "GATEMHCCKCY67ZUCKTROYN24ZYT5GK4EQZ65JJLDHKHRUZI3EUEKMTCH",
@@ -240,6 +242,7 @@ describe("Settlement with Horizon Finality Verification", () => {
       async verifyExact() {
         return { valid: true, adapter: "@x402/stellar" };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact(): Promise<X402SettlementResult> {
         return {
           status: "failed",
@@ -275,9 +278,7 @@ describe("Settlement with Horizon Finality Verification", () => {
       }
     };
 
-    await expect(failedService.settle(settlementRequest)).rejects.toThrow(
-      "SETTLEMENT_FAILED"
-    );
+    await expect(failedService.settle(settlementRequest)).rejects.toThrow("SETTLEMENT_FAILED");
 
     const settlement = await settlementStore.getSettlementByTransactionHash(
       "failed_verification_tx",

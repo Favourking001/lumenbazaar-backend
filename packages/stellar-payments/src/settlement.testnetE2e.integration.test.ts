@@ -63,14 +63,14 @@ describe.skipIf(!process.env.TESTNET_FACILITATOR_SECRET)(
         },
         settlement: {
           maxTransactionFeeStroops: 100_000,
-          inclusionFeeStroops: 1000
+          inclusionFeeStroops: 1000,
+          feeCeilingStroops: 100_000,
+          feeCeilingOverrideEnabled: false
         },
         redisUrl: "redis://localhost:6379"
       } as AppConfig;
 
-      const signerProvider = new EnvironmentFacilitatorSignerProvider(
-        "TESTNET_FACILITATOR_SECRET"
-      );
+      const signerProvider = new EnvironmentFacilitatorSignerProvider("TESTNET_FACILITATOR_SECRET");
 
       const adapter = createX402StellarAdapter({
         config,
@@ -96,8 +96,7 @@ describe.skipIf(!process.env.TESTNET_FACILITATOR_SECRET)(
         // Create a verified payment attempt
         const attemptStore = service["attemptStore"] as InMemoryPaymentAttemptStore;
         await attemptStore.createVerifiedAttempt({
-          paymentHash:
-            "testnet_e2e_settlement_abc123def456abc123def456abc123def456abc",
+          paymentHash: "testnet_e2e_settlement_abc123def456abc123def456abc123def456abc",
           network: "testnet",
           assetCode: "USDC",
           assetIssuer: testnet.usdcIssuer,
@@ -139,10 +138,7 @@ describe.skipIf(!process.env.TESTNET_FACILITATOR_SECRET)(
 
         // Verify transaction exists on Horizon
         const server = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org");
-        const transaction = await server
-          .transactions()
-          .transaction(result.transactionHash)
-          .call();
+        const transaction = await server.transactions().transaction(result.transactionHash).call();
 
         expect(transaction.successful).toBe(true);
         expect(transaction.ledger_attr).toBe(result.ledger);
@@ -154,8 +150,7 @@ describe.skipIf(!process.env.TESTNET_FACILITATOR_SECRET)(
       "should handle concurrent settlement requests idempotently",
       async () => {
         const attemptStore = service["attemptStore"] as InMemoryPaymentAttemptStore;
-        const paymentHash =
-          "testnet_concurrent_settlement_xyz789uvw123xyz789uvw123xyz789uvw";
+        const paymentHash = "testnet_concurrent_settlement_xyz789uvw123xyz789uvw123xyz789uvw";
 
         await attemptStore.createVerifiedAttempt({
           paymentHash,

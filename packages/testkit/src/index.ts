@@ -16,6 +16,8 @@ export {
   testPaymentRequirement,
   testPaymentRequest,
   testPaymentConfigEnv,
+  testFeeQuote,
+  stubQuoteSettlementFee,
   createTestPaymentRequest,
   testMalformedPaymentRequest,
   testWrongVersionPaymentRequest,

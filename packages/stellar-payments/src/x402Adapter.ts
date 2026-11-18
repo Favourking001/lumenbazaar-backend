@@ -8,6 +8,11 @@ import {
   type ExactStellarPaymentRequirements,
   type NormalizedVerifyPaymentRequest
 } from "./paymentPayload.js";
+import {
+  createSorobanSettlementFeeQuoter,
+  type SettlementFeeQuote,
+  type SettlementFeeQuoter
+} from "./settlementFeeCeiling.js";
 
 export type X402VerificationInput = {
   paymentPayload: ExactStellarPaymentPayload;
@@ -41,6 +46,13 @@ export type SettlementFinality =
 export type X402StellarAdapter = {
   verifyExact: (input: X402VerificationInput) => Promise<X402VerificationResult>;
   settleExact?: (input: X402VerificationInput) => Promise<X402SettlementResult>;
+  /**
+   * Quote the fee the settlement transaction would pay, from a fresh
+   * Soroban simulation. The settlement service calls this immediately
+   * before signing to enforce the configured fee ceiling. Adapters that
+   * cannot quote a fee fail the settlement closed instead of signing blind.
+   */
+  quoteSettlementFee?: (input: X402VerificationInput) => Promise<SettlementFeeQuote>;
 };
 
 type OfficialExactVerifier = {
@@ -57,6 +69,7 @@ type OfficialExactVerifier = {
 export type X402StellarAdapterOptions = {
   config: AppConfig;
   signerProvider: FacilitatorSignerProvider;
+  feeQuoter?: SettlementFeeQuoter;
   createVerifier?: (input: {
     network: ExactStellarPaymentRequirements["network"];
     rpcUrl: string;
@@ -97,6 +110,7 @@ function createOfficialAdapter(options: X402StellarAdapterOptions): X402StellarA
       });
     });
   const resolveFinality = options.resolveFinality ?? resolveRpcFinality;
+  const feeQuoter = options.feeQuoter ?? createSorobanSettlementFeeQuoter(options.config);
 
   async function getVerifier(input: X402VerificationInput) {
     const network = options.config.networks[input.normalizedRequest.network];
@@ -132,6 +146,9 @@ function createOfficialAdapter(options: X402StellarAdapterOptions): X402StellarA
           "SETTLEMENT_FAILED"
         );
       }
+    },
+    async quoteSettlementFee(input) {
+      return feeQuoter.quoteSettlementFee(input);
     },
     async settleExact(input) {
       try {
@@ -416,6 +433,7 @@ function failureMessage(reason: string): string {
     SELLER_DOMAIN_UNVERIFIED: "Payment payload is invalid.",
     SELLER_NOT_FOUND: "Payment payload is invalid.",
     SETTLEMENT_FAILED: "Official Stellar verification could not be completed.",
+    FEE_CEILING_EXCEEDED: "Settlement fee exceeds the configured fee ceiling.",
     TRUSTLINE_REQUIRED: "Payment payload is invalid.",
     UNAUTHORIZED: "Payment payload is invalid.",
     UNSUPPORTED_ASSET: "Payment payload is invalid.",
