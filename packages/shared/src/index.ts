@@ -9,6 +9,7 @@ export * from "./redactionService.js";
 export * from "./release.js";
 export * from "./errorMapping.js";
 export * from "./errors.js";
+export * from "./errorCatalog.js";
 export * from "./models.js";
 export * from "./networks.js";
 export * from "./pagination.js";
