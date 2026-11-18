@@ -31,6 +31,39 @@ export {
 export { MockFacilitator, createMockFacilitator } from "./mock-facilitator.js";
 export type { MockFacilitatorOptions } from "./mock-facilitator.js";
 
+// Chaos harness exports
+export {
+  ChaosFaultInjector,
+  ChaosGuardError,
+  DependencyOutageError,
+  InMemoryChaosSystem,
+  assertTestEndpoint,
+  chaosDependencies,
+  chaosScenarios,
+  createChaosRunId,
+  createSeededRandom,
+  getChaosScenario,
+  isAllowedTestEndpoint,
+  runChaosScenario,
+  runChaosScenarios,
+  validateChaosScenario,
+  virtualTimestamp
+} from "./chaos.js";
+export type {
+  ChaosAssertionResult,
+  ChaosDependency,
+  ChaosEndpointMap,
+  ChaosRecoveryEvidence,
+  ChaosReport,
+  ChaosScenarioDefinition,
+  ChaosStep,
+  ChaosSystemState,
+  ChaosSystemUnderTest,
+  ChaosTimelineEvent,
+  ChaosTimelineEventType,
+  RunChaosScenarioOptions
+} from "./chaos.js";
+
 // Conformance exports
 export {
   ConformanceTestSuite,
