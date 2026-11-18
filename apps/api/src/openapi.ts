@@ -3,12 +3,21 @@ import { getReleaseCommit, serviceName } from "@lumenbazaar/shared";
 type HttpMethod = "get" | "post" | "patch" | "delete";
 type SchemaObject = Record<string, unknown>;
 
+type RouteParameter = {
+  name: string;
+  in: "query";
+  required?: boolean;
+  description: string;
+  schema: SchemaObject;
+};
+
 type RouteContract = {
   method: HttpMethod;
   path: string;
   operationId: string;
   summary: string;
   tags: string[];
+  parameters?: RouteParameter[];
   requestBody?: SchemaObject;
   requestBodyRequired?: boolean;
   response: SchemaObject;
@@ -133,6 +142,50 @@ const rateLimitHeaders: Record<string, unknown> = {
       "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
     schema: { type: "integer", minimum: 1 }
   }
+};
+
+const networkQueryParameter: RouteParameter = {
+  name: "network",
+  in: "query",
+  description: "Stellar network the resource settles on.",
+  schema: { type: "string", enum: ["stellar:testnet", "stellar:pubnet"] }
+};
+
+const assetQueryParameter: RouteParameter = {
+  name: "asset",
+  in: "query",
+  description: "Asset code the resource accepts (for example, USDC).",
+  schema: { type: "string" }
+};
+
+const resourceTypeQueryParameter: RouteParameter = {
+  name: "type",
+  in: "query",
+  description: "Resource type.",
+  schema: { type: "string", enum: ["http", "mcp"] }
+};
+
+const sellerIdQueryParameter: RouteParameter = {
+  name: "sellerId",
+  in: "query",
+  description: "Only return resources owned by this seller.",
+  schema: { type: "string" }
+};
+
+const cursorQueryParameter: RouteParameter = {
+  name: "cursor",
+  in: "query",
+  description:
+    "Opaque pagination cursor from a previous response. Paging stops at the maximum result window of 1000 results; a cursor at or beyond that depth is rejected with RESULT_WINDOW_EXCEEDED.",
+  schema: { type: "string" }
+};
+
+const limitQueryParameter: RouteParameter = {
+  name: "limit",
+  in: "query",
+  description:
+    "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
+  schema: { type: "integer", minimum: 1, maximum: 100, default: 25 }
 };
 
 const assetSchema: SchemaObject = {
@@ -944,14 +997,56 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "browseDiscoveryResources",
     summary: "Browse discoverable paid resources.",
     tags: ["discovery"],
+    parameters: [
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      {
+        name: "minPrice",
+        in: "query",
+        description: "Only return resources priced at or above this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "maxPrice",
+        in: "query",
+        description: "Only return resources priced at or below this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "extension",
+        in: "query",
+        description: "Only return resources carrying this extension key.",
+        schema: { type: "string" }
+      },
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
     response: jsonObject
   },
   {
     method: "get",
     path: "/v1/discovery/search",
     operationId: "searchDiscoveryResources",
-    summary: "Search paid resources by query and filters.",
+    summary:
+      "Search paid resources by query and filters. Queries are scored against a deterministic cost budget (maximum 50) before execution; over-budget queries are rejected with QUERY_TOO_COMPLEX. See docs/api/search-query-limits.md.",
     tags: ["discovery"],
+    parameters: [
+      {
+        name: "q",
+        in: "query",
+        description:
+          "Free-text query. Maximum 200 characters and 20 terms; each term costs 2 against the query cost budget.",
+        schema: { type: "string", maxLength: 200 }
+      },
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
     response: jsonObject
   },
   {
@@ -1045,6 +1140,7 @@ export function buildOpenApiSpec(
       operationId: contract.operationId,
       summary: contract.summary,
       tags: contract.tags,
+      ...(contract.parameters === undefined ? {} : { parameters: contract.parameters }),
       ...(contract.requestBody === undefined
         ? {}
         : {

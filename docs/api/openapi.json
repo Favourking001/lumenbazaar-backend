@@ -5,7 +5,7 @@
     "version": "0.1.0",
     "description": "Facilitator, seller catalog, discovery, and conformance APIs for LumenBazaar.",
     "x-release": {
-      "commit": "737e891baa49e202a7f4f4d8424177f0c7b99c43",
+      "commit": "00df0aa35e915e2cdd55c41871b1676ab335b54c",
       "version": "0.1.0",
       "protocol": "stellar-x402",
       "x402Version": 2,
@@ -5361,6 +5361,62 @@
         "operationId": "browseDiscoveryResources",
         "summary": "Browse discoverable paid resources.",
         "tags": ["discovery"],
+        "parameters": [
+          {
+            "name": "network",
+            "in": "query",
+            "description": "Stellar network the resource settles on.",
+            "schema": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] }
+          },
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Asset code the resource accepts (for example, USDC).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Resource type.",
+            "schema": { "type": "string", "enum": ["http", "mcp"] }
+          },
+          {
+            "name": "sellerId",
+            "in": "query",
+            "description": "Only return resources owned by this seller.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "minPrice",
+            "in": "query",
+            "description": "Only return resources priced at or above this amount.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "maxPrice",
+            "in": "query",
+            "description": "Only return resources priced at or below this amount.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "extension",
+            "in": "query",
+            "description": "Only return resources carrying this extension key.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response. Paging stops at the maximum result window of 1000 results; a cursor at or beyond that depth is rejected with RESULT_WINDOW_EXCEEDED.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -5476,8 +5532,52 @@
     "/v1/discovery/search": {
       "get": {
         "operationId": "searchDiscoveryResources",
-        "summary": "Search paid resources by query and filters.",
+        "summary": "Search paid resources by query and filters. Queries are scored against a deterministic cost budget (maximum 50) before execution; over-budget queries are rejected with QUERY_TOO_COMPLEX. See docs/api/search-query-limits.md.",
         "tags": ["discovery"],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free-text query. Maximum 200 characters and 20 terms; each term costs 2 against the query cost budget.",
+            "schema": { "type": "string", "maxLength": 200 }
+          },
+          {
+            "name": "network",
+            "in": "query",
+            "description": "Stellar network the resource settles on.",
+            "schema": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] }
+          },
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Asset code the resource accepts (for example, USDC).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Resource type.",
+            "schema": { "type": "string", "enum": ["http", "mcp"] }
+          },
+          {
+            "name": "sellerId",
+            "in": "query",
+            "description": "Only return resources owned by this seller.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response. Paging stops at the maximum result window of 1000 results; a cursor at or beyond that depth is rejected with RESULT_WINDOW_EXCEEDED.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",

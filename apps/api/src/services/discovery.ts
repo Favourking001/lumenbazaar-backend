@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { type Resource } from "@lumenbazaar/shared";
+import { type Resource, assertSearchQueryWithinLimits } from "@lumenbazaar/shared";
 
 import { type ResourceService } from "./resources.js";
 
@@ -26,8 +26,11 @@ export class DiscoveryService {
   constructor(private readonly resourceService: ResourceService) {}
 
   async browse(input: unknown): Promise<DiscoveryBrowseResult> {
+    const filters = browseDiscoverySchema.parse(input);
+    // Enforce query cost and result caps before any database work.
+    assertSearchQueryWithinLimits(filters);
     const page = await this.resourceService.listResources({
-      ...browseDiscoverySchema.parse(input),
+      ...filters,
       status: "active"
     });
 
