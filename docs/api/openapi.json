@@ -5,7 +5,7 @@
     "version": "0.1.0",
     "description": "Facilitator, seller catalog, discovery, and conformance APIs for LumenBazaar.",
     "x-release": {
-      "commit": "00df0aa35e915e2cdd55c41871b1676ab335b54c",
+      "commit": "4f54ef35e4cca052b073fbc730e0ea04a2d5adb9",
       "version": "0.1.0",
       "protocol": "stellar-x402",
       "x402Version": 2,
@@ -1099,7 +1099,7 @@
     "/v1/verify": {
       "post": {
         "operationId": "verifyPayment",
-        "summary": "Verify an exact Stellar x402 payment payload.",
+        "summary": "Verify an exact Stellar x402 payment payload. The transaction memo and payment destinations are checked against the memo and muxed-account policy before verification.",
         "tags": ["facilitator"],
         "requestBody": {
           "required": true,
@@ -1163,7 +1163,7 @@
                           "transaction": {
                             "type": "string",
                             "contentEncoding": "base64",
-                            "description": "Wallet-signed Stellar transaction envelope XDR."
+                            "description": "Wallet-signed Stellar transaction envelope XDR. The transaction memo and payment destinations must satisfy the memo and muxed-account policy: memo types none, text (at most 28 bytes), id (uint64), hash and return (32 bytes) are accepted with a G-address destination; muxed-account (M...) and contract (C...) destinations are rejected with every memo type (error UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT)."
                           }
                         }
                       },
@@ -1333,7 +1333,7 @@
     "/v1/settle": {
       "post": {
         "operationId": "settlePayment",
-        "summary": "Settle a previously verified exact Stellar x402 payment.",
+        "summary": "Settle a previously verified exact Stellar x402 payment. The transaction memo and payment destinations are checked against the memo and muxed-account policy before settlement.",
         "tags": ["facilitator"],
         "requestBody": {
           "required": true,
@@ -1397,7 +1397,7 @@
                           "transaction": {
                             "type": "string",
                             "contentEncoding": "base64",
-                            "description": "Wallet-signed Stellar transaction envelope XDR."
+                            "description": "Wallet-signed Stellar transaction envelope XDR. The transaction memo and payment destinations must satisfy the memo and muxed-account policy: memo types none, text (at most 28 bytes), id (uint64), hash and return (32 bytes) are accepted with a G-address destination; muxed-account (M...) and contract (C...) destinations are rejected with every memo type (error UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT)."
                           }
                         }
                       },

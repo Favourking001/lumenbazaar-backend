@@ -437,6 +437,8 @@ function failureMessage(reason: string): string {
     TRUSTLINE_REQUIRED: "Payment payload is invalid.",
     UNAUTHORIZED: "Payment payload is invalid.",
     UNSUPPORTED_ASSET: "Payment payload is invalid.",
+    UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT:
+      "Payment memo or destination is not supported by the memo and muxed-account policy.",
     UNSUPPORTED_NETWORK: "Payment network is not supported.",
     VALIDATION_FAILED: "Payment payload is invalid."
   };

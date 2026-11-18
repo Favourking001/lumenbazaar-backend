@@ -1,35 +1,35 @@
 {
   "release": {
     "version": "0.1.0",
-    "commit": "00df0aa35e915e2cdd55c41871b1676ab335b54c",
+    "commit": "4f54ef35e4cca052b073fbc730e0ea04a2d5adb9",
     "x402Version": 2,
     "x402PackageVersion": "2.28.0"
   },
   "algorithm": "sha256",
-  "generatedAt": "2026-11-18T18:35:57.009Z",
+  "generatedAt": "2026-11-18T19:04:03.107Z",
   "artifacts": [
     {
       "name": "openapi.json",
       "path": "docs/api/openapi.json",
-      "checksum": "190dff5cbf06e219738dea4078ad4e3ba5852ee56b30d04132b1d04bf999e332",
-      "bytes": 292031
+      "checksum": "150e22ecc55a23ce5364f1d438d49239ccd719b61fcd02f83d4187546253cbdd",
+      "bytes": 292971
     },
     {
       "name": "openapi.md",
       "path": "docs/api/openapi.md",
-      "checksum": "920dc12f6e47e3b5beb1e64e906ec0406e8b1a24028aea88e6a64c87faeeea28",
+      "checksum": "8916de9289a1ee8c64be1bd76cc3ce6b7e819139f11b1dd960bd2b179af5b60b",
       "bytes": 12657
     },
     {
       "name": "conformance.json",
       "path": "docs/api/conformance.json",
-      "checksum": "d9db1be7a24b0ae0d520974fd17806a4431e0e5da33c3d1b0b4245416807c3ae",
+      "checksum": "6d0d86b66089d88bf93a8ebfbb9112682cb409730745f787257dfebe2b1cf1dd",
       "bytes": 5011
     },
     {
       "name": "conformance.md",
       "path": "docs/api/conformance.md",
-      "checksum": "4ba0ef4355bd5d915a0f4f07cc03196fa87135c0bfca73c77cbeb53127b27fac",
+      "checksum": "c82b5eb2337984c1b644ae65891de377ce7cb646331969a9f0d9de8ad071862a",
       "bytes": 3466
     }
   ]

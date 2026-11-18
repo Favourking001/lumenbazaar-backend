@@ -337,7 +337,12 @@ const paymentPayload: SchemaObject = {
         transaction: {
           type: "string",
           contentEncoding: "base64",
-          description: "Wallet-signed Stellar transaction envelope XDR."
+          description:
+            "Wallet-signed Stellar transaction envelope XDR. The transaction memo and payment " +
+            "destinations must satisfy the memo and muxed-account policy: memo types none, text " +
+            "(at most 28 bytes), id (uint64), hash and return (32 bytes) are accepted with a " +
+            "G-address destination; muxed-account (M...) and contract (C...) destinations are " +
+            "rejected with every memo type (error UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT)."
         }
       }
     },
@@ -702,7 +707,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/verify",
     operationId: "verifyPayment",
-    summary: "Verify an exact Stellar x402 payment payload.",
+    summary:
+      "Verify an exact Stellar x402 payment payload. The transaction memo and payment destinations are checked against the memo and muxed-account policy before verification.",
     tags: ["facilitator"],
     requestBody: verificationRequest,
     response: verificationResponse
@@ -711,7 +717,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/settle",
     operationId: "settlePayment",
-    summary: "Settle a previously verified exact Stellar x402 payment.",
+    summary:
+      "Settle a previously verified exact Stellar x402 payment. The transaction memo and payment destinations are checked against the memo and muxed-account policy before settlement.",
     tags: ["facilitator"],
     requestBody: {
       type: "object",
