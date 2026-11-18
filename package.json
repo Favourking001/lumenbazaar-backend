@@ -9,6 +9,11 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
+    "backup:create": "tsx scripts/backup.ts",
+    "backup:verify": "tsx scripts/verify-backup.ts",
+    "backup:restore": "tsx scripts/restore-backup.ts",
+    "backup:reconcile": "tsx scripts/reconcile-backup.ts",
+    "backup:drill": "tsx scripts/backup-recovery-drill.ts",
     "build": "pnpm prisma:generate && pnpm typecheck",
     "check": "pnpm prisma:generate && pnpm openapi:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm prisma:validate",
     "dev:api": "tsx apps/api/src/main.ts",
