@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   LumenError,
+  type MutationActor,
   type AppConfig,
   type JsonObject,
   type PaymentRequirement,
@@ -68,7 +69,11 @@ export type ListResourceFilters = z.output<typeof listResourcesSchema>;
 export type ResourceStore = {
   createResource: (input: CreateResourceInput) => Promise<Resource>;
   getResource: (resourceId: string) => Promise<Resource | undefined>;
-  updateResource: (resourceId: string, input: UpdateResourceInput) => Promise<Resource>;
+  updateResource: (
+    resourceId: string,
+    input: UpdateResourceInput,
+    actor?: MutationActor
+  ) => Promise<Resource>;
   listResources: (
     filters: ListResourceFilters
   ) => Promise<{ resources: Resource[]; nextCursor: string | null }>;
@@ -79,7 +84,8 @@ export type ResourceStore = {
   rollbackResource: (
     resourceId: string,
     patch: UpdateResourceInput,
-    metadata: JsonObject
+    metadata: JsonObject,
+    actor?: MutationActor
   ) => Promise<{ resource: Resource; version: ResourceVersion }>;
   createSchema: (resource: Resource) => Promise<ResourceSchema>;
   createPaymentRequirement: (resource: Resource) => Promise<PaymentRequirement>;
@@ -212,7 +218,9 @@ export class InMemoryResourceStore implements ResourceStore {
   }
 
   async listVersions(resourceId: string) {
-    return [...(this.versions.get(resourceId) ?? [])].sort((left, right) => left.version - right.version);
+    return [...(this.versions.get(resourceId) ?? [])].sort(
+      (left, right) => left.version - right.version
+    );
   }
 
   async rollbackResource(resourceId: string, patch: UpdateResourceInput, metadata: JsonObject) {
@@ -274,7 +282,7 @@ export class ResourceService {
 
   async createResource(input: unknown, sellerContext?: { sellerId: string; auditable: boolean }) {
     const resource = normalizeResourceInput(createResourceSchema.parse(input), this.config);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && resource.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -289,12 +297,9 @@ export class ResourceService {
           actualSellerId: sellerContext.sellerId
         }
       });
-      throw new LumenError(
-        "FORBIDDEN",
-        "API key cannot create resources for another seller."
-      );
+      throw new LumenError("FORBIDDEN", "API key cannot create resources for another seller.");
     }
-    
+
     const seller = await this.sellerService.getSeller(resource.sellerId);
     assertSafeResourceTarget(resource.url, resource.type, resource.routeTemplate, seller.domain);
     const created = await this.store.createResource(resource);
@@ -317,9 +322,13 @@ export class ResourceService {
     return resource;
   }
 
-  async updateResource(resourceId: string, input: unknown, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async updateResource(
+    resourceId: string,
+    input: unknown,
+    sellerContext?: { sellerId: string; auditable: boolean }
+  ) {
     const existing = await this.getResource(resourceId);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && existing.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -336,7 +345,7 @@ export class ResourceService {
       });
       throw new LumenError("FORBIDDEN", "API key does not own this resource.");
     }
-    
+
     const patch = updateResourceSchema.parse(input);
     const normalized = normalizeResourceInput(mergeResourcePatch(existing, patch), this.config);
 
@@ -347,12 +356,19 @@ export class ResourceService {
       normalized.routeTemplate,
       seller.domain
     );
-    const updated = await this.store.updateResource(resourceId, normalized);
+    const updated = await this.store.updateResource(resourceId, normalized, {
+      actorId: sellerContext?.sellerId ?? "internal",
+      actorType: sellerContext ? "seller" : "system",
+      reason: normalized.status !== existing.status ? "resource.status_change" : "resource.update"
+    });
     await this.queueLatestVersion(updated.id);
     return updated;
   }
 
-  async deleteResource(resourceId: string, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async deleteResource(
+    resourceId: string,
+    sellerContext?: { sellerId: string; auditable: boolean }
+  ) {
     return this.updateResource(resourceId, { status: "inactive" }, sellerContext);
   }
 
@@ -375,9 +391,13 @@ export class ResourceService {
    * never modified; rollback creates a new immutable version containing the
    * restored data and queues it for reindexing.
    */
-  async rollbackResource(resourceId: string, targetVersion: number, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async rollbackResource(
+    resourceId: string,
+    targetVersion: number,
+    sellerContext?: { sellerId: string; auditable: boolean }
+  ) {
     const existing = await this.getResource(resourceId);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && existing.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -395,7 +415,7 @@ export class ResourceService {
       });
       throw new LumenError("FORBIDDEN", "API key does not own this resource.");
     }
-    
+
     const target = await this.store.getVersion(resourceId, targetVersion);
     if (target === undefined) {
       throw new LumenError("RESOURCE_VERSION_NOT_FOUND", "Resource version was not found.");
@@ -403,10 +423,7 @@ export class ResourceService {
 
     const latest = await this.store.getLatestVersion(resourceId);
     if (latest === undefined || target.version >= latest.version) {
-      throw new LumenError(
-        "CONFLICT",
-        "Can only roll back to an older historical version."
-      );
+      throw new LumenError("CONFLICT", "Can only roll back to an older historical version.");
     }
 
     const metadata: JsonObject = {
@@ -418,7 +435,12 @@ export class ResourceService {
     const { resource, version } = await this.store.rollbackResource(
       resourceId,
       target.metadata as unknown as UpdateResourceInput,
-      metadata
+      metadata,
+      {
+        actorId: sellerContext?.sellerId ?? "internal",
+        actorType: sellerContext ? "seller" : "system",
+        reason: "resource.rollback"
+      }
     );
     await this.queueLatestVersion(resource.id);
     return { resource, version };

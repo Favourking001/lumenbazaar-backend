@@ -5,6 +5,8 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 
 import {
+  appendPrivilegedAudit,
+  type MutationActor,
   decodeCursor,
   encodeCursor,
   getTraceparent,
@@ -42,10 +44,7 @@ import {
   type ResourceStore,
   type UpdateResourceInput
 } from "./resources.js";
-import {
-  InMemorySearchDocumentStore,
-  type SearchDocumentStore
-} from "./search.js";
+import { InMemorySearchDocumentStore, type SearchDocumentStore } from "./search.js";
 import {
   InMemorySellerApiKeyStore,
   type SellerApiKeyRecord,
@@ -132,7 +131,11 @@ export class PrismaResourceStore implements ResourceStore {
     return row === null ? undefined : mapResource(row);
   }
 
-  async updateResource(resourceId: string, input: UpdateResourceInput) {
+  async updateResource(
+    resourceId: string,
+    input: UpdateResourceInput,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.update" }
+  ) {
     return this.db.$transaction(async (tx) => {
       const resource = mapResource(
         await tx.resource.update({
@@ -157,6 +160,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.update", resourceId, actor);
       return resource;
     });
   }
@@ -221,7 +225,12 @@ export class PrismaResourceStore implements ResourceStore {
     return rows.map(mapResourceVersion);
   }
 
-  async rollbackResource(resourceId: string, patch: UpdateResourceInput, metadata: JsonObject) {
+  async rollbackResource(
+    resourceId: string,
+    patch: UpdateResourceInput,
+    metadata: JsonObject,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.rollback" }
+  ) {
     return this.db.$transaction(async (tx) => {
       const resource = mapResource(
         await tx.resource.update({
@@ -248,6 +257,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.rollback", resourceId, actor);
       return { resource, version };
     });
   }
@@ -337,7 +347,10 @@ export class PrismaSellerApiKeyStore implements SellerApiKeyStore {
 export class PrismaCatalogEventStore implements CatalogEventStore {
   constructor(private readonly db: PrismaClient) {}
 
-  async createCatalogEvent(input: Omit<CatalogEvent, "id" | "createdAt">, tx?: Prisma.TransactionClient) {
+  async createCatalogEvent(
+    input: Omit<CatalogEvent, "id" | "createdAt">,
+    tx?: Prisma.TransactionClient
+  ) {
     // Use provided transaction client if available, otherwise use root client
     const client = tx ?? this.db;
     return mapCatalogEvent(
@@ -404,10 +417,10 @@ export function createCatalogPersistence(config: AppConfig) {
     config.nodeEnv !== "production" ||
     config.lumenEnv === "local"
   ) {
-  return {
-    sellerStore: new InMemorySellerStore() as SellerStore,
-    sellerApiKeyStore: new InMemorySellerApiKeyStore() as SellerApiKeyStore,
-    resourceStore: new InMemoryResourceStore() as ResourceStore,
+    return {
+      sellerStore: new InMemorySellerStore() as SellerStore,
+      sellerApiKeyStore: new InMemorySellerApiKeyStore() as SellerApiKeyStore,
+      resourceStore: new InMemoryResourceStore() as ResourceStore,
       eventStore: new InMemoryCatalogEventStore() as CatalogEventStore,
       searchDocumentStore: new InMemorySearchDocumentStore() as SearchDocumentStore,
       indexingQueue: new InMemoryResourceIndexingQueue() as ResourceIndexingQueue,
