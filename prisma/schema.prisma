@@ -13,6 +13,9 @@ model Seller {
   walletAddress    String           @unique
   domain           String
   domainVerifiedAt DateTime?
+  status           String           @default("active")
+  suspendedAt      DateTime?
+  suspensionReason String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   domains          SellerDomain[]
@@ -28,6 +31,7 @@ model Seller {
   apiKeys          SellerApiKey[]
 
   @@index([domain])
+  @@index([status])
 }
 
 model SellerApiKey {

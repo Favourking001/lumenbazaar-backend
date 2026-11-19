@@ -1,4 +1,5 @@
 import { type NetworkId } from "./networks.js";
+import { type SellerStatus } from "./sellerSuspension.js";
 
 export type JsonValue =
   | string
@@ -44,6 +45,10 @@ export type Seller = {
   walletAddress: string;
   domain: string;
   domainVerifiedAt: string | null;
+  /** Seller lifecycle status: `active` or `suspended`. Suspended sellers cannot perform write or paid-resource operations. */
+  status: SellerStatus;
+  suspendedAt: string | null;
+  suspensionReason: string | null;
   createdAt: string;
   updatedAt: string;
 };

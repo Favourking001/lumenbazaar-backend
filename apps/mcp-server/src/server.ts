@@ -3,6 +3,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { z, ZodError } from "zod";
 
 import type { PaymentPayload } from "@lumenbazaar/buyer-sdk";
+import { type SellerStatusResolver } from "@lumenbazaar/shared";
 
 import { BackendClient } from "./client.js";
 import { CapabilityUnavailableError, handleToolError, ValidationError } from "./errors.js";
@@ -15,11 +16,24 @@ export type CreateMcpServerOptions = {
   capabilityProvider?: () => Promise<McpToolCapabilities>;
   paymentTools?: McpPaymentToolService;
   metrics?: McpMetricsService;
+  /**
+   * Optional seller-status resolver. When provided, resources owned by a
+   * suspended seller are excluded from `search_paid_resources` results.
+   * Paid tools enforce suspension separately in `McpPaymentToolService`.
+   */
+  resolveSellerStatus?: SellerStatusResolver;
 };
 
 export function createMcpServer(options: CreateMcpServerOptions = {}) {
   const client = options.client ?? new BackendClient();
-  const paymentTools = options.paymentTools ?? new McpPaymentToolService({ client });
+  const paymentTools =
+    options.paymentTools ??
+    new McpPaymentToolService({
+      client,
+      ...(options.resolveSellerStatus === undefined
+        ? {}
+        : { resolveSellerStatus: options.resolveSellerStatus })
+    });
   const capabilityProvider = options.capabilityProvider ?? (() => client.getToolCapabilities());
   const server = new Server(
     {
@@ -106,8 +120,15 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
           if (searchParams.cursor !== undefined) params.cursor = searchParams.cursor;
 
           const response = await client.searchResources(params);
+          const visibleResources =
+            options.resolveSellerStatus === undefined
+              ? response.resources
+              : await filterSuspendedSellersResources(
+                  response.resources,
+                  options.resolveSellerStatus
+                );
           result = {
-            resources: response.resources.map((r) => ({
+            resources: visibleResources.map((r) => ({
               id: r.id,
               name: r.name,
               description: r.description,
@@ -242,6 +263,37 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
   });
 
   return server;
+}
+
+/**
+ * Exclude resources owned by suspended sellers from search results so a
+ * suspended seller cannot be reached for a new paid call through MCP
+ * discovery. Resources without a seller id are left visible.
+ */
+async function filterSuspendedSellersResources(
+  resources: Array<Record<string, unknown>>,
+  resolveSellerStatus: SellerStatusResolver
+): Promise<Array<Record<string, unknown>>> {
+  const sellerIds = [
+    ...new Set(
+      resources
+        .map((resource) => resource.sellerId)
+        .filter((sellerId): sellerId is string => typeof sellerId === "string")
+    )
+  ];
+  const suspended = new Set(
+    (
+      await Promise.all(
+        sellerIds.map(async (sellerId) => {
+          const info = await resolveSellerStatus(sellerId);
+          return info?.status === "suspended" ? sellerId : null;
+        })
+      )
+    ).filter((sellerId): sellerId is string => sellerId !== null)
+  );
+  return resources.filter(
+    (resource) => typeof resource.sellerId !== "string" || !suspended.has(resource.sellerId)
+  );
 }
 
 export function mcpToolSchemaDocument(capabilities: McpToolCapabilities) {

@@ -198,6 +198,62 @@ describe("MCP payment tools", () => {
       status: "finalized"
     });
   });
+
+  it("blocks prepare_payment for a resource owned by a suspended seller", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ...resource(), sellerId: "seller_suspended" }))
+    );
+    const service = new McpPaymentToolService({
+      apiUrl: "https://api.example.test",
+      resolveSellerStatus: async (sellerId) =>
+        sellerId === "seller_suspended"
+          ? {
+              status: "suspended",
+              suspendedAt: "2026-11-19T08:00:00.000Z",
+              suspensionReason: "operator review"
+            }
+          : null
+    });
+
+    await expect(service.preparePayment({ resourceId: "resource_1" })).rejects.toMatchObject({
+      code: "SELLER_SUSPENDED"
+    });
+  });
+
+  it("blocks call_paid_resource for a suspended seller but still serves receipt reads", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === "https://api.example.test/v1/resources/resource_1") {
+        return Response.json({ ...resource(), sellerId: "seller_suspended" });
+      }
+      if (url === "https://api.example.test/v1/receipts/receipt_1") {
+        return Response.json({ id: "receipt_1", status: "finalized" });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const service = new McpPaymentToolService({
+      apiUrl: "https://api.example.test",
+      resolveSellerStatus: async () => ({
+        status: "suspended" as const,
+        suspendedAt: "2026-11-19T08:00:00.000Z",
+        suspensionReason: "operator review"
+      })
+    });
+
+    await expect(
+      service.callPaidResource({
+        paymentPayload: testPaymentPayload,
+        resourceId: "resource_1"
+      })
+    ).rejects.toMatchObject({ code: "SELLER_SUSPENDED" });
+
+    // Receipt reads are recovery/read: they stay available while suspended.
+    await expect(service.getPaymentReceipt({ receiptId: "receipt_1" })).resolves.toEqual({
+      id: "receipt_1",
+      status: "finalized"
+    });
+  });
 });
 
 function resource() {

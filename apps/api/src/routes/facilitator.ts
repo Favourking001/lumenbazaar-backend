@@ -1,7 +1,13 @@
 import { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { LumenError, type AppConfig, listConfiguredNetworks } from "@lumenbazaar/shared";
+import {
+  LumenError,
+  assertSellerActiveForOperation,
+  type AppConfig,
+  listConfiguredNetworks,
+  type SellerStatusResolver
+} from "@lumenbazaar/shared";
 import {
   PaymentVerificationService,
   SettlementService,
@@ -19,6 +25,14 @@ import { type ReceiptStatusStreamService } from "../services/receiptStatusStream
 export type FacilitatorRouteOptions = {
   config: AppConfig;
   readiness: ReadinessService;
+  /**
+   * When provided, verify/settle are gated on the payee seller's suspension
+   * state: a suspended seller's resources cannot take new payments (paid).
+   * Receipt reads stay available. The payee is resolved from the payment
+   * payload's `accepted.payTo` via the seller wallet lookup.
+   */
+  resolveSellerStatusByWallet?: (walletAddress: string) => Promise<string | null>;
+  resolveSellerStatus?: SellerStatusResolver;
   /**
    * When provided, `GET /v1/supported` reads which schemes are available from
    * the capability registry instead of (or in addition to) the readiness report.
@@ -55,12 +69,16 @@ export function registerFacilitatorRoutes(app: FastifyInstance, options: Facilit
     const readinessCapabilities = readinessReport.capabilities;
 
     const registry = options.capabilityRegistry?.();
-    const exactEnabled = registry !== undefined
-      ? registry.isSupported("exact", networks[0]?.id ?? "stellar:testnet") && readinessCapabilities.exact
-      : readinessCapabilities.exact;
-    const uptoEnabled = registry !== undefined
-      ? registry.isSupported("upto", networks[0]?.id ?? "stellar:testnet") && readinessCapabilities.upto
-      : readinessCapabilities.upto;
+    const exactEnabled =
+      registry !== undefined
+        ? registry.isSupported("exact", networks[0]?.id ?? "stellar:testnet") &&
+          readinessCapabilities.exact
+        : readinessCapabilities.exact;
+    const uptoEnabled =
+      registry !== undefined
+        ? registry.isSupported("upto", networks[0]?.id ?? "stellar:testnet") &&
+          readinessCapabilities.upto
+        : readinessCapabilities.upto;
 
     const exactKinds = exactEnabled
       ? networks.map((network) => ({
@@ -118,6 +136,7 @@ export function registerFacilitatorRoutes(app: FastifyInstance, options: Facilit
     const network = extractPaymentNetwork(request.body);
 
     try {
+      await assertPayeeSellerActive(request.body, options);
       const result = await verificationService.verify(request.body);
       reply.header("x-correlation-id", result.correlationId);
       options.metrics?.recordVerification(result.network, "accepted");
@@ -141,6 +160,7 @@ export function registerFacilitatorRoutes(app: FastifyInstance, options: Facilit
     const network = extractPaymentNetwork(request.body);
 
     try {
+      await assertPayeeSellerActive(request.body, options);
       const result = await settlementService.settle(request.body);
       reply.header("x-correlation-id", result.correlationId);
       await options.receiptStreams?.notifyReceipt(result.receiptId);
@@ -171,6 +191,54 @@ export function registerFacilitatorRoutes(app: FastifyInstance, options: Facilit
     reply.header("x-correlation-id", receipt.correlationId);
     return receipt;
   });
+}
+
+/**
+ * Suspension gate for new payments: resolve the payee seller from the
+ * payment payload and block the request when that seller is suspended.
+ * Unknown payees (no seller record for the wallet) are left alone — there
+ * is no seller to suspend, and the payment services still validate the
+ * payload itself.
+ */
+async function assertPayeeSellerActive(
+  body: unknown,
+  options: FacilitatorRouteOptions
+): Promise<void> {
+  if (
+    options.resolveSellerStatus === undefined ||
+    options.resolveSellerStatusByWallet === undefined
+  ) {
+    return;
+  }
+  const payTo = extractPaymentPayTo(body);
+  if (payTo === undefined) {
+    return;
+  }
+  const sellerId = await options.resolveSellerStatusByWallet(payTo);
+  if (sellerId === null) {
+    return;
+  }
+  await assertSellerActiveForOperation(options.resolveSellerStatus, sellerId, "paid");
+}
+
+function extractPaymentPayTo(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return undefined;
+  }
+  const paymentPayload = (body as Record<string, unknown>).paymentPayload;
+  if (
+    typeof paymentPayload !== "object" ||
+    paymentPayload === null ||
+    Array.isArray(paymentPayload)
+  ) {
+    return undefined;
+  }
+  const accepted = (paymentPayload as Record<string, unknown>).accepted;
+  if (typeof accepted !== "object" || accepted === null || Array.isArray(accepted)) {
+    return undefined;
+  }
+  const payTo = (accepted as Record<string, unknown>).payTo;
+  return typeof payTo === "string" && payTo.length > 0 ? payTo : undefined;
 }
 
 function extractPaymentNetwork(body: unknown): string {

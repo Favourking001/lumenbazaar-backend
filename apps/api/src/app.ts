@@ -220,7 +220,12 @@ export function buildApiApp(options: BuildApiAppOptions = {}) {
     );
   const sellerApiKeyService =
     options.sellerApiKeyService ??
-    new SellerApiKeyService(catalogPersistence.sellerApiKeyStore, auditLogService);
+    new SellerApiKeyService(
+      catalogPersistence.sellerApiKeyStore,
+      auditLogService,
+      undefined,
+      (sellerId) => sellerService.getSellerStatus(sellerId)
+    );
   registerSellerApiKeyAuth(app, {
     sellerApiKeyService,
     resolveResourceSeller: async (resourceId) => {
@@ -281,10 +286,17 @@ export function buildApiApp(options: BuildApiAppOptions = {}) {
       indexingQueue: catalogPersistence.indexingQueue,
       metrics: metricsService
     });
-  const discoveryService = options.discoveryService ?? new DiscoveryService(resourceService);
+  const discoveryService =
+    options.discoveryService ??
+    new DiscoveryService(resourceService, (sellerId) => sellerService.getSellerStatus(sellerId));
   const searchService =
     options.searchService ??
-    new SearchService(resourceService, metricsService, catalogPersistence.searchDocumentStore);
+    new SearchService(
+      resourceService,
+      metricsService,
+      catalogPersistence.searchDocumentStore,
+      (sellerId) => sellerService.getSellerStatus(sellerId)
+    );
   // ── Capability registry ──────────────────────────────────────────────────────
   // Built asynchronously in onReady so adapter startup checks complete before
   // traffic is accepted. Tests may inject a pre-built registry via options.
@@ -382,11 +394,29 @@ export function buildApiApp(options: BuildApiAppOptions = {}) {
     metrics: metricsService,
     readiness: readinessService,
     receiptStreams: receiptStatusStreams,
-    capabilityRegistry: () => getCapabilityRegistry()
+    capabilityRegistry: () => getCapabilityRegistry(),
+    resolveSellerStatus: (sellerId) => sellerService.getSellerStatus(sellerId),
+    resolveSellerStatusByWallet: async (walletAddress) => {
+      const seller = await sellerService
+        .getStore()
+        .findSellerByWallet(walletAddress)
+        .catch(() => undefined);
+      return seller?.id ?? null;
+    }
   });
-  registerPaymentSessionRoutes(app, { paymentSessionService });
+  registerPaymentSessionRoutes(app, {
+    paymentSessionService,
+    resolveSellerStatus: (sellerId) => sellerService.getSellerStatus(sellerId),
+    resolveResourceSeller: async (resourceId) => {
+      const resource = await resourceService.getResource(resourceId).catch(() => undefined);
+      return resource?.sellerId;
+    }
+  });
   registerSellerRoutes(app, { sellerService, sellerApiKeyService });
-  registerWebhookRoutes(app, { webhookService: options.webhookService });
+  registerWebhookRoutes(app, {
+    ...(options.webhookService === undefined ? {} : { webhookService: options.webhookService }),
+    resolveSellerStatus: (sellerId) => sellerService.getSellerStatus(sellerId)
+  });
   registerResourceRoutes(app, { resourceService });
   registerDiscoveryRoutes(app, {
     catalogValidationService,

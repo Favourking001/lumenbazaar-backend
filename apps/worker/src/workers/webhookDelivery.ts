@@ -10,7 +10,9 @@ import {
   WEBHOOK_TIMESTAMP_HEADER,
   WEBHOOK_DELIVERY_REQUEST_TIMEOUT_MS,
   WEBHOOK_MAX_DELIVERY_ATTEMPTS,
-  WEBHOOK_DELIVERY_INITIAL_BACKOFF_MS
+  WEBHOOK_DELIVERY_INITIAL_BACKOFF_MS,
+  shouldSkipSuspendedSellerWork,
+  type SellerStatusResolver
 } from "@lumenbazaar/shared";
 
 /**
@@ -62,13 +64,31 @@ export function computeBackoffDelay(
  * Deliver a webhook to an endpoint.
  * Includes HMAC-SHA256 signing, timeout handling, and delivery attempt recording.
  *
+ * When `resolveSellerStatus` is provided and the owning seller is suspended,
+ * the delivery is skipped without contacting the endpoint (`shouldRetry:
+ * false`): queued deliveries are new seller-visible work, not recovery.
+ *
  * @param input - Webhook delivery job input
  * @returns Delivery result with retry instructions
  */
 export async function deliverWebhook(
-  input: WebhookDeliveryJobInput
+  input: WebhookDeliveryJobInput,
+  options: { resolveSellerStatus?: SellerStatusResolver } = {}
 ): Promise<WebhookDeliveryResult> {
   const startTime = Date.now();
+
+  if (options.resolveSellerStatus !== undefined) {
+    const sellerStatus = await options.resolveSellerStatus(input.sellerId);
+    if (shouldSkipSuspendedSellerWork(sellerStatus)) {
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        errorClass: "SELLER_SUSPENDED",
+        shouldRetry: false
+      };
+    }
+  }
+
   let rawBody: string;
   try {
     rawBody = serializeWebhookPayload(input.payload);

@@ -7,11 +7,11 @@ import {
   type Resource,
   type SearchDocument,
   LumenError,
-  normalizeLimit
+  normalizeLimit,
   assertSearchQueryWithinLimits,
   maxSearchCandidates,
-  normalizeLimit,
-  tokenizeSearchQuery
+  tokenizeSearchQuery,
+  type SellerStatusResolver
 } from "@lumenbazaar/shared";
 
 import { type ResourceService } from "./resources.js";
@@ -73,7 +73,13 @@ export class SearchService {
   constructor(
     private readonly resourceService: ResourceService,
     private readonly metrics?: MetricsService,
-    private readonly documentStore: SearchDocumentStore = new InMemorySearchDocumentStore()
+    private readonly documentStore: SearchDocumentStore = new InMemorySearchDocumentStore(),
+    /**
+     * Optional seller-status resolver. When provided, resources owned by
+     * suspended sellers are excluded from search results so a suspended
+     * seller cannot be reached for a new paid call through search.
+     */
+    private readonly resolveSellerStatus?: SellerStatusResolver
   ) {}
 
   async rebuildIndex() {
@@ -171,6 +177,7 @@ export class SearchService {
           );
         sourceCursor = page.nextCursor ?? undefined;
       } while (sourceCursor !== undefined);
+      const visibleResources = await this.filterSuspendedSellersResources(allResources);
       const page = await this.resourceService.listResources({
         limit: maxSearchCandidates,
         status: "active",
@@ -181,12 +188,12 @@ export class SearchService {
       });
       const queryTerms = tokenize(filters.q ?? "");
       const documentEntries = await Promise.all(
-        allResources.map(
+        visibleResources.map(
           async (resource) => [resource.id, await this.documentStore.get(resource.id)] as const
         )
       );
       const documents = new Map(documentEntries);
-      const ranked = allResources
+      const ranked = visibleResources
         .map((resource) => {
           const document = documents.get(resource.id);
           const body = document?.body ?? buildSearchBody(resource);
@@ -231,6 +238,24 @@ export class SearchService {
       this.metrics?.observeSearchLatency(Date.now() - startedAt);
     }
   }
+  private async filterSuspendedSellersResources(resources: Resource[]): Promise<Resource[]> {
+    if (this.resolveSellerStatus === undefined) {
+      return resources;
+    }
+    const sellerIds = [...new Set(resources.map((resource) => resource.sellerId))];
+    const suspended = new Set(
+      (
+        await Promise.all(
+          sellerIds.map(async (sellerId) => {
+            const info = await this.resolveSellerStatus!(sellerId);
+            return info?.status === "suspended" ? sellerId : null;
+          })
+        )
+      ).filter((sellerId): sellerId is string => sellerId !== null)
+    );
+    return resources.filter((resource) => !suspended.has(resource.sellerId));
+  }
+
   private snapshotPage(
     id: string,
     offset: number,

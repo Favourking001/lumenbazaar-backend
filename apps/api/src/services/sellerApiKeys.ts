@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import {
+  assertSellerActiveForOperation,
   LumenError,
   SELLER_API_KEY_MAX_TTL_DAYS,
   SELLER_API_KEY_PREFIX,
@@ -10,7 +11,8 @@ import {
   sellerApiKeyScopeSchema,
   type SellerApiKey,
   type SellerApiKeyPrincipal,
-  type SellerApiKeyScope
+  type SellerApiKeyScope,
+  type SellerStatusResolver
 } from "@lumenbazaar/shared";
 
 import { type AuditLogService } from "./audit.js";
@@ -196,7 +198,14 @@ export class SellerApiKeyService {
   constructor(
     private readonly store: SellerApiKeyStore = new InMemorySellerApiKeyStore(),
     private readonly auditLogService?: AuditLogService,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    /**
+     * Optional seller-status resolver. When provided, issuing or rotating a
+     * key for a suspended seller is blocked (write); revoking stays allowed
+     * (recovery), and `authenticate` reports the suspension on the principal
+     * instead of rejecting, so reads and recovery can still proceed.
+     */
+    private readonly resolveSellerStatus?: SellerStatusResolver
   ) {}
 
   /**
@@ -204,6 +213,9 @@ export class SellerApiKeyService {
    * only its SHA-256 hash is persisted.
    */
   async createKey(sellerId: string, input: unknown) {
+    if (this.resolveSellerStatus !== undefined) {
+      await assertSellerActiveForOperation(this.resolveSellerStatus, sellerId, "write");
+    }
     const request = createSellerApiKeySchema.parse(input);
     const generated = generateSellerApiKey();
     const expiresAt =
@@ -257,6 +269,9 @@ export class SellerApiKeyService {
    * bounded overlap window so integrations can switch without downtime.
    */
   async rotateKey(sellerId: string, keyId: string, input: unknown = {}) {
+    if (this.resolveSellerStatus !== undefined) {
+      await assertSellerActiveForOperation(this.resolveSellerStatus, sellerId, "write");
+    }
     const previous = await this.requireOwnedKey(sellerId, keyId);
     if (previous.status === "revoked") {
       throw new LumenError("VALIDATION_FAILED", "Revoked API keys cannot be rotated.");
@@ -364,11 +379,17 @@ export class SellerApiKeyService {
 
     await this.store.touchLastUsed(record.id, this.now());
 
+    const sellerStatus =
+      this.resolveSellerStatus === undefined
+        ? null
+        : await this.resolveSellerStatus(record.sellerId);
+
     return {
       keyId: record.id,
       sellerId: record.sellerId,
       scopes: [...record.scopes],
-      expiresAt: record.expiresAt
+      expiresAt: record.expiresAt,
+      sellerSuspended: sellerStatus?.status === "suspended"
     };
   }
 

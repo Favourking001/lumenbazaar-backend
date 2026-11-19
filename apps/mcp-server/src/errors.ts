@@ -2,6 +2,8 @@
  * Structured MCP error types and utilities
  */
 
+import { LumenError } from "@lumenbazaar/shared";
+
 export class McpError extends Error {
   constructor(
     public code: string,
@@ -65,6 +67,20 @@ export function handleToolError(error: unknown): {
   details?: Record<string, unknown>;
 } {
   if (error instanceof McpError) {
+    const result: { code: string; message: string; details?: Record<string, unknown> } = {
+      code: error.code,
+      message: error.message
+    };
+    if (error.details !== undefined) {
+      result.details = error.details;
+    }
+    return result;
+  }
+
+  // Typed API errors (for example SELLER_SUSPENDED from suspension
+  // enforcement) keep their code so MCP callers can tell a suspension
+  // refusal apart from an internal failure.
+  if (error instanceof LumenError) {
     const result: { code: string; message: string; details?: Record<string, unknown> } = {
       code: error.code,
       message: error.message

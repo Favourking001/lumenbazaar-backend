@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { type Resource, assertSearchQueryWithinLimits } from "@lumenbazaar/shared";
+import {
+  type Resource,
+  assertSearchQueryWithinLimits,
+  type SellerStatusResolver
+} from "@lumenbazaar/shared";
 
 import { type ResourceService } from "./resources.js";
 
@@ -23,7 +27,16 @@ export type DiscoveryBrowseResult = {
 };
 
 export class DiscoveryService {
-  constructor(private readonly resourceService: ResourceService) {}
+  constructor(
+    private readonly resourceService: ResourceService,
+    /**
+     * Optional seller-status resolver. When provided, resources owned by
+     * suspended sellers are excluded from browse results so a suspended
+     * seller cannot be reached for a new paid call through discovery.
+     * Single-resource reads are unaffected.
+     */
+    private readonly resolveSellerStatus?: SellerStatusResolver
+  ) {}
 
   async browse(input: unknown): Promise<DiscoveryBrowseResult> {
     const filters = browseDiscoverySchema.parse(input);
@@ -35,9 +48,27 @@ export class DiscoveryService {
     });
 
     return {
-      resources: page.resources,
+      resources: await this.filterSuspendedSellersResources(page.resources),
       nextCursor: page.nextCursor,
       partialResults: false
     };
+  }
+
+  private async filterSuspendedSellersResources(resources: Resource[]): Promise<Resource[]> {
+    if (this.resolveSellerStatus === undefined) {
+      return resources;
+    }
+    const sellerIds = [...new Set(resources.map((resource) => resource.sellerId))];
+    const suspended = new Set(
+      (
+        await Promise.all(
+          sellerIds.map(async (sellerId) => {
+            const info = await this.resolveSellerStatus!(sellerId);
+            return info?.status === "suspended" ? sellerId : null;
+          })
+        )
+      ).filter((sellerId): sellerId is string => sellerId !== null)
+    );
+    return resources.filter((resource) => !suspended.has(resource.sellerId));
   }
 }

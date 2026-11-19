@@ -7,7 +7,6 @@ import { Redis } from "ioredis";
 import {
   canonicalResourceUrl,
   appendPrivilegedAudit,
-  type MutationActor,
   decodeCursor,
   encodeCursor,
   getTraceparent,
@@ -26,7 +25,8 @@ import {
   type Seller,
   type SellerApiKey,
   type SellerApiKeyScope,
-  type SellerDomain
+  type SellerDomain,
+  type SellerStatus
 } from "@lumenbazaar/shared";
 
 import {
@@ -111,6 +111,18 @@ export class PrismaSellerStore implements SellerStore {
       return mapSeller(seller);
     });
   }
+
+  async setSellerStatus(sellerId: string, status: SellerStatus, reason?: string) {
+    return mapSeller(
+      await this.db.seller.update({
+        where: { id: sellerId },
+        data:
+          status === "suspended"
+            ? { status, suspendedAt: new Date(), suspensionReason: reason ?? null }
+            : { status, suspendedAt: null, suspensionReason: null }
+      })
+    );
+  }
 }
 
 export class PrismaResourceStore implements ResourceStore {
@@ -136,7 +148,6 @@ export class PrismaResourceStore implements ResourceStore {
   async updateResource(
     resourceId: string,
     input: UpdateResourceInput,
-    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.update" }
     options: ResourceMutationOptions
   ) {
     return this.db.$transaction(async (tx) => {
@@ -183,7 +194,11 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
-      await appendPrivilegedAudit(tx, "resource.update", resourceId, actor);
+      await appendPrivilegedAudit(tx, "resource.update", resourceId, {
+        actorId: "internal",
+        actorType: "system",
+        reason: "resource.update"
+      });
       return resource;
     });
   }
@@ -252,7 +267,6 @@ export class PrismaResourceStore implements ResourceStore {
     resourceId: string,
     patch: UpdateResourceInput,
     metadata: JsonObject,
-    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.rollback" }
     options: ResourceMutationOptions
   ) {
     return this.db.$transaction(async (tx) => {
@@ -299,7 +313,11 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
-      await appendPrivilegedAudit(tx, "resource.rollback", resourceId, actor);
+      await appendPrivilegedAudit(tx, "resource.rollback", resourceId, {
+        actorId: "internal",
+        actorType: "system",
+        reason: "resource.rollback"
+      });
       return { resource, version };
     });
   }
@@ -504,8 +522,8 @@ function resourceUpdateData(input: UpdateResourceInput): Prisma.ResourceUnchecke
   // The `version` field of an update payload is the optimistic-concurrency
   // precondition, never a value to write: the store increments the stored
   // version itself, atomically, only when the precondition matches.
-  const patch = { ...input };
-  delete patch.version;
+  // (The payload is written field-by-field below, so `version` is never
+  // copied onto the row.)
   return {
     ...(input.type === undefined ? {} : { type: input.type }),
     ...(input.name === undefined ? {} : { name: input.name }),
@@ -520,24 +538,13 @@ function resourceUpdateData(input: UpdateResourceInput): Prisma.ResourceUnchecke
     ...(input.assetIssuer === undefined ? {} : { assetIssuer: input.assetIssuer }),
     ...(input.amount === undefined ? {} : { amount: input.amount }),
     ...(input.inputSchema === undefined
-    ...(patch.type === undefined ? {} : { type: patch.type }),
-    ...(patch.name === undefined ? {} : { name: patch.name }),
-    ...(patch.description === undefined ? {} : { description: patch.description }),
-    ...(patch.url === undefined ? {} : { url: patch.url }),
-    ...(patch.routeTemplate === undefined ? {} : { routeTemplate: patch.routeTemplate }),
-    ...(patch.network === undefined ? {} : { network: patch.network }),
-    ...(patch.payTo === undefined ? {} : { payTo: patch.payTo }),
-    ...(patch.assetCode === undefined ? {} : { assetCode: patch.assetCode }),
-    ...(patch.assetIssuer === undefined ? {} : { assetIssuer: patch.assetIssuer }),
-    ...(patch.amount === undefined ? {} : { amount: patch.amount }),
-    ...(patch.inputSchema === undefined
       ? {}
-      : { inputSchema: json(patch.inputSchema as JsonObject) }),
-    ...(patch.outputSchema === undefined
+      : { inputSchema: json(input.inputSchema as JsonObject) }),
+    ...(input.outputSchema === undefined
       ? {}
-      : { outputSchema: json(patch.outputSchema as JsonObject) }),
-    ...(patch.extensions === undefined ? {} : { extensions: json(patch.extensions as JsonObject) }),
-    ...(patch.status === undefined ? {} : { status: patch.status })
+      : { outputSchema: json(input.outputSchema as JsonObject) }),
+    ...(input.extensions === undefined ? {} : { extensions: json(input.extensions as JsonObject) }),
+    ...(input.status === undefined ? {} : { status: input.status })
   };
 }
 
@@ -564,6 +571,9 @@ function paymentRequirementData(resource: Resource): Prisma.PaymentRequirementUn
 function mapSeller(row: Prisma.SellerGetPayload<object>): Seller {
   return {
     ...row,
+    status: row.status as Seller["status"],
+    suspendedAt: row.suspendedAt?.toISOString() ?? null,
+    suspensionReason: row.suspensionReason,
     domainVerifiedAt: row.domainVerifiedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()

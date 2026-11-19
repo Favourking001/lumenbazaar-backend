@@ -3,12 +3,14 @@ import { type Job, type Queue, Worker } from "bullmq";
 import {
   disconnectPrismaClient,
   getPrismaClient,
+  sellerSuspensionFromSeller,
   type AppConfig,
   loadConfig,
   redactSensitiveText,
   runWithTraceparent,
   safeIdentifierHash,
-  startTraceSpan
+  startTraceSpan,
+  type SellerStatusResolver
 } from "@lumenbazaar/shared";
 import { settlementReconciliationJobId } from "@lumenbazaar/stellar-payments";
 import { createBullMqConnection, createBullMqQueue, queueNames, type QueueName } from "./queues.js";
@@ -44,13 +46,17 @@ async function traceWorkerJob(
   return runWithTraceparent(parent, async () => {
     const settlementHash = safeIdentifierHash(job.data.settlementId);
     const receiptHash = safeIdentifierHash(job.data.receiptId);
-    const span = startTraceSpan("worker.job", {
-      "messaging.destination.name": queueName,
-      "messaging.operation": "process",
-      "app.job.name": job.name,
-      ...(settlementHash === undefined ? {} : { "app.settlement.id_hash": settlementHash }),
-      ...(receiptHash === undefined ? {} : { "app.receipt.id_hash": receiptHash })
-    }, 4);
+    const span = startTraceSpan(
+      "worker.job",
+      {
+        "messaging.destination.name": queueName,
+        "messaging.operation": "process",
+        "app.job.name": job.name,
+        ...(settlementHash === undefined ? {} : { "app.settlement.id_hash": settlementHash }),
+        ...(receiptHash === undefined ? {} : { "app.receipt.id_hash": receiptHash })
+      },
+      4
+    );
     return span.run(async () => {
       try {
         await callback();
@@ -66,6 +72,24 @@ export type WorkerJob = {
   name: string;
   queueName: QueueName;
   data: Record<string, unknown>;
+};
+
+/**
+ * Live seller-status resolver for queued-work gates: resource indexing and
+ * search sync skip work for suspended sellers. Settlement confirmation and
+ * receipt finalization are recovery of in-flight payments and are
+ * intentionally not gated here.
+ */
+export const resolveSellerStatusFromDb: SellerStatusResolver = async (sellerId) => {
+  const seller = await getPrismaClient().seller.findUnique({ where: { id: sellerId } });
+  if (seller === null) {
+    return null;
+  }
+  return sellerSuspensionFromSeller({
+    status: seller.status,
+    suspendedAt: seller.suspendedAt,
+    suspensionReason: seller.suspensionReason
+  });
 };
 
 export type WorkerBackend = {
@@ -132,7 +156,9 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.resourceIndexing,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.resourceIndexing, async () => {
-            await handleResourceIndexing(job as Job<ResourceIndexingJobData>);
+            await handleResourceIndexing(job as Job<ResourceIndexingJobData>, {
+              resolveSellerStatus: resolveSellerStatusFromDb
+            });
             this.recordProcessedJob(job, queueNames.resourceIndexing);
           }),
         {
@@ -169,7 +195,9 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.searchSync,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.searchSync, async () => {
-            await handleSearchSync(job as Job<SearchSyncJobData>);
+            await handleSearchSync(job as Job<SearchSyncJobData>, {
+              resolveSellerStatus: resolveSellerStatusFromDb
+            });
             this.recordProcessedJob(job, queueNames.searchSync);
           }),
         {
@@ -296,7 +324,8 @@ export class BullMqWorkerBackend implements WorkerBackend {
         sourceJobId: String(job.id),
         sourceQueue: queueNames.settlementConfirmation,
         correlationId: job.data.correlationId,
-        traceparent: (job.data as SettlementConfirmationJobData & { traceparent?: string }).traceparent,
+        traceparent: (job.data as SettlementConfirmationJobData & { traceparent?: string })
+          .traceparent,
         paymentAttemptId: job.data.paymentAttemptId,
         settlementId: job.data.settlementId,
         reason

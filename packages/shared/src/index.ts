@@ -20,6 +20,7 @@ export * from "./db/outbox.js";
 export * from "./retentionPolicy.js";
 export * from "./routeTemplates.js";
 export * from "./sellerApiKeys.js";
+export * from "./sellerSuspension.js";
 export * from "./webhooks.js";
 
 export * from "./resourceUrl.js";
