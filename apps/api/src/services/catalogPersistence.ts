@@ -5,6 +5,8 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 
 import {
+  appendPrivilegedAudit,
+  type MutationActor,
   decodeCursor,
   encodeCursor,
   getTraceparent,
@@ -133,6 +135,7 @@ export class PrismaResourceStore implements ResourceStore {
   async updateResource(
     resourceId: string,
     input: UpdateResourceInput,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.update" }
     options: ResourceMutationOptions
   ) {
     return this.db.$transaction(async (tx) => {
@@ -179,6 +182,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.update", resourceId, actor);
       return resource;
     });
   }
@@ -247,6 +251,7 @@ export class PrismaResourceStore implements ResourceStore {
     resourceId: string,
     patch: UpdateResourceInput,
     metadata: JsonObject,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.rollback" }
     options: ResourceMutationOptions
   ) {
     return this.db.$transaction(async (tx) => {
@@ -293,6 +298,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.rollback", resourceId, actor);
       return { resource, version };
     });
   }

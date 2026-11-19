@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   LumenError,
+  type MutationActor,
   type AppConfig,
   type JsonObject,
   type PaymentRequirement,
@@ -88,6 +89,7 @@ export type ResourceStore = {
   updateResource: (
     resourceId: string,
     input: UpdateResourceInput,
+    actor?: MutationActor
     options: ResourceMutationOptions
   ) => Promise<Resource>;
   listResources: (
@@ -101,6 +103,7 @@ export type ResourceStore = {
     resourceId: string,
     patch: UpdateResourceInput,
     metadata: JsonObject,
+    actor?: MutationActor
     options: ResourceMutationOptions
   ) => Promise<{ resource: Resource; version: ResourceVersion }>;
   createSchema: (resource: Resource) => Promise<ResourceSchema>;
@@ -412,6 +415,11 @@ export class ResourceService {
       normalized.routeTemplate,
       seller.domain
     );
+    const updated = await this.store.updateResource(resourceId, normalized, {
+      actorId: sellerContext?.sellerId ?? "internal",
+      actorType: sellerContext ? "seller" : "system",
+      reason: normalized.status !== existing.status ? "resource.status_change" : "resource.update"
+    });
     const updated = await this.store.updateResource(resourceId, normalized, { expectedVersion });
     await this.queueLatestVersion(updated.id);
     return updated;
@@ -496,6 +504,11 @@ export class ResourceService {
       resourceId,
       target.metadata as unknown as UpdateResourceInput,
       metadata,
+      {
+        actorId: sellerContext?.sellerId ?? "internal",
+        actorType: sellerContext ? "seller" : "system",
+        reason: "resource.rollback"
+      }
       { expectedVersion }
     );
     await this.queueLatestVersion(resource.id);
