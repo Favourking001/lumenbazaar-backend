@@ -6,7 +6,10 @@ import {
   type JsonObject,
   type Resource,
   type SearchDocument,
-  normalizeLimit
+  assertSearchQueryWithinLimits,
+  maxSearchCandidates,
+  normalizeLimit,
+  tokenizeSearchQuery
 } from "@lumenbazaar/shared";
 
 import { type ResourceService } from "./resources.js";
@@ -100,9 +103,11 @@ export class SearchService {
 
     try {
       const filters = searchResourcesSchema.parse(input);
+      // Enforce query cost and result caps before any database work.
+      assertSearchQueryWithinLimits(filters);
       const limit = normalizeLimit(filters.limit);
       const page = await this.resourceService.listResources({
-        limit: 100,
+        limit: maxSearchCandidates,
         status: "active",
         ...(filters.network === undefined ? {} : { network: filters.network }),
         ...(filters.asset === undefined ? {} : { asset: filters.asset }),
@@ -221,8 +226,5 @@ function countProperties(schema: JsonObject) {
 }
 
 function tokenize(query: string) {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((term) => term.length > 0);
+  return tokenizeSearchQuery(query);
 }

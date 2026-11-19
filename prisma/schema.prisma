@@ -82,6 +82,7 @@ model Resource {
   outputSchema        Json
   extensions          Json
   status              String               @default("active")
+  version             Int                  @default(1)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   seller              Seller               @relation(fields: [sellerId], references: [id], onDelete: Restrict)

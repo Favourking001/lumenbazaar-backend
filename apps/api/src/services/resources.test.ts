@@ -51,7 +51,8 @@ describe("ResourceService", () => {
       sellerId: seller.id,
       assetCode: "USDC",
       amount: "0.05",
-      status: "active"
+      status: "active",
+      version: 1
     });
     await expect(resourceService.getResource(resource.id)).resolves.toEqual(resource);
     await expect(resourceService.listResources({ sellerId: seller.id })).resolves.toMatchObject({
@@ -60,9 +61,12 @@ describe("ResourceService", () => {
     });
 
     const updated = await resourceService.updateResource(resource.id, {
-      name: "Paid Forecast API"
+      name: "Paid Forecast API",
+      version: 1
     });
-    const deleted = await resourceService.deleteResource(resource.id);
+    const deleted = await resourceService.deleteResource(resource.id, undefined, {
+      expectedVersion: 2
+    });
 
     expect(updated.name).toBe("Paid Forecast API");
     expect(deleted.status).toBe("inactive");
@@ -168,9 +172,11 @@ describe("ResourceService", () => {
       expect(first).toMatchObject({ version: 1, metadata: { name: "Paid Weather API" } });
 
       const updated = await service.updateResource(resource.id, {
-        name: "Paid Forecast API"
+        name: "Paid Forecast API",
+        version: 1
       });
       expect(updated.name).toBe("Paid Forecast API");
+      expect(updated.version).toBe(2);
 
       const second = await store.getLatestVersion(resource.id);
       expect(second).toMatchObject({ version: 2, metadata: { name: "Paid Forecast API" } });
@@ -188,8 +194,8 @@ describe("ResourceService", () => {
         domain: "seller.example"
       });
       const resource = await service.createResource(resourceInput(seller.id));
-      await service.updateResource(resource.id, { name: "v2" });
-      await service.updateResource(resource.id, { name: "v3" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
+      await service.updateResource(resource.id, { name: "v3", version: 2 });
 
       const versions = await service.listResourceVersions(resource.id);
       expect(versions.map((version) => version.version)).toEqual([1, 2, 3]);
@@ -212,12 +218,15 @@ describe("ResourceService", () => {
         domain: "seller.example"
       });
       const resource = await service.createResource(resourceInput(seller.id));
-      await service.updateResource(resource.id, { name: "v2" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
 
-      const rolledBack = await service.rollbackResource(resource.id, 1);
+      const rolledBack = await service.rollbackResource(resource.id, 1, undefined, {
+        expectedVersion: 2
+      });
 
       expect(rolledBack.version.version).toBe(3);
       expect(rolledBack.resource.name).toBe("Paid Weather API");
+      expect(rolledBack.resource.version).toBe(3);
       expect(rolledBack.version.metadata.rolledBackFromVersion).toBe(1);
 
       const latest = await store.getLatestVersion(resource.id);
@@ -238,7 +247,9 @@ describe("ResourceService", () => {
       });
       const resource = await service.createResource(resourceInput(seller.id));
 
-      await expect(service.rollbackResource(resource.id, 42)).rejects.toMatchObject({
+      await expect(
+        service.rollbackResource(resource.id, 42, undefined, { expectedVersion: 1 })
+      ).rejects.toMatchObject({
         code: "RESOURCE_VERSION_NOT_FOUND"
       });
     });
@@ -251,10 +262,12 @@ describe("ResourceService", () => {
         domain: "seller.example"
       });
       const resource = await service.createResource(resourceInput(seller.id));
-      await service.updateResource(resource.id, { name: "v2" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
       const latest = (await store.getLatestVersion(resource.id))!.version;
 
-      await expect(service.rollbackResource(resource.id, latest)).rejects.toMatchObject({
+      await expect(
+        service.rollbackResource(resource.id, latest, undefined, { expectedVersion: 2 })
+      ).rejects.toMatchObject({
         code: "CONFLICT"
       });
     });
@@ -284,16 +297,14 @@ describe("ResourceService", () => {
         domain: "seller.example"
       });
       const resource = await service.createResource(resourceInput(seller.id));
-      await service.updateResource(resource.id, { name: "v2" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
 
-      const rolledBack = await service.rollbackResource(resource.id, 1);
+      const rolledBack = await service.rollbackResource(resource.id, 1, undefined, {
+        expectedVersion: 2
+      });
 
-      expect(
-        jobs.some((job) => job.versionId === rolledBack.version.id)
-      ).toBe(true);
-      expect(
-        jobs.some((job) => job.resourceId === resource.id)
-      ).toBe(true);
+      expect(jobs.some((job) => job.versionId === rolledBack.version.id)).toBe(true);
+      expect(jobs.some((job) => job.resourceId === resource.id)).toBe(true);
     });
   });
 
@@ -380,7 +391,7 @@ describe("ResourceService", () => {
 
       const updated = await service.updateResource(
         resource.id,
-        { name: "Updated Name" },
+        { name: "Updated Name", version: 1 },
         {
           sellerId: seller.id,
           auditable: true
@@ -444,10 +455,14 @@ describe("ResourceService", () => {
       });
       const resource = await service.createResource(resourceInput(seller.id));
 
-      const deleted = await service.deleteResource(resource.id, {
-        sellerId: seller.id,
-        auditable: true
-      });
+      const deleted = await service.deleteResource(
+        resource.id,
+        {
+          sellerId: seller.id,
+          auditable: true
+        },
+        { expectedVersion: 1 }
+      );
 
       expect(deleted.status).toBe("inactive");
     });
@@ -496,12 +511,17 @@ describe("ResourceService", () => {
         domain: "seller.example"
       });
       const resource = await service.createResource(resourceInput(seller.id));
-      await service.updateResource(resource.id, { name: "v2" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
 
-      const rolledBack = await service.rollbackResource(resource.id, 1, {
-        sellerId: seller.id,
-        auditable: true
-      });
+      const rolledBack = await service.rollbackResource(
+        resource.id,
+        1,
+        {
+          sellerId: seller.id,
+          auditable: true
+        },
+        { expectedVersion: 2 }
+      );
 
       expect(rolledBack.resource.name).toBe("Paid Weather API");
     });
@@ -519,7 +539,7 @@ describe("ResourceService", () => {
         domain: "seller2.example"
       });
       const resource = await service.createResource(resourceInput(seller1.id));
-      await service.updateResource(resource.id, { name: "v2" });
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
 
       // Seller 2's API key tries to rollback Seller 1's resource
       await expect(
@@ -564,7 +584,7 @@ describe("ResourceService", () => {
       // Unauthenticated update
       const updated = await service.updateResource(
         resource.id,
-        { name: "Updated" },
+        { name: "Updated", version: 1 },
         undefined
       );
       expect(updated.name).toBe("Updated");
@@ -604,6 +624,169 @@ describe("ResourceService", () => {
       // Verify audit log was created (before attempting update)
       const logs = await auditLogStore.list();
       expect(logs.some((log) => log.action === "resource.ownership_denied")).toBe(true);
+    });
+  });
+
+  describe("optimistic concurrency (issue #102)", () => {
+    function setup() {
+      const sellerService = new SellerService();
+      const store = new InMemoryResourceStore();
+      const service = new ResourceService(
+        loadConfig({ STELLAR_TESTNET_USDC_ISSUER: localIssuerPublicKey }),
+        sellerService,
+        store
+      );
+      return { sellerService, store, service };
+    }
+
+    async function createResource() {
+      const { sellerService, service } = setup();
+      const seller = await sellerService.createSeller({
+        displayName: "Weather Seller",
+        walletAddress: localIssuerPublicKey,
+        domain: "seller.example"
+      });
+      const resource = await service.createResource(resourceInput(seller.id));
+      return { service, resource };
+    }
+
+    it("starts at version 1 and increments atomically on a guarded update", async () => {
+      const { service, resource } = await createResource();
+      expect(resource.version).toBe(1);
+
+      const updated = await service.updateResource(resource.id, {
+        name: "Paid Forecast API",
+        version: 1
+      });
+      expect(updated.version).toBe(2);
+      expect(updated.name).toBe("Paid Forecast API");
+
+      // The resource version stays in step with the immutable history.
+      const latest = await service.listResourceVersions(resource.id);
+      expect(latest.map((entry) => entry.version)).toEqual([1, 2]);
+      expect(latest.at(-1)!.version).toBe(updated.version);
+    });
+
+    it("rejects a stale write with a typed conflict and leaves the resource untouched", async () => {
+      const { service, resource } = await createResource();
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
+
+      await expect(
+        service.updateResource(resource.id, { name: "stale write", version: 1 })
+      ).rejects.toMatchObject({
+        code: "RESOURCE_VERSION_CONFLICT",
+        statusCode: 409,
+        details: { expectedVersion: 1, currentVersion: 2, resourceId: resource.id }
+      });
+
+      const current = await service.getResource(resource.id);
+      expect(current.name).toBe("v2");
+      expect(current.version).toBe(2);
+    });
+
+    it("rejects a mutation with no version precondition", async () => {
+      const { service, resource } = await createResource();
+
+      await expect(
+        service.updateResource(resource.id, { name: "no precondition" })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        message: expect.stringMatching(/expected resource version is required/i)
+      });
+      await expect(service.deleteResource(resource.id)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED"
+      });
+      await expect(service.rollbackResource(resource.id, 1)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED"
+      });
+    });
+
+    it("prefers the If-Match header over the version body field", async () => {
+      const { service, resource } = await createResource();
+
+      // Header says 1 (current), body says 99 (stale): the header wins.
+      const updated = await service.updateResource(
+        resource.id,
+        { name: "header wins", version: 99 },
+        undefined,
+        { expectedVersion: 1 }
+      );
+      expect(updated.version).toBe(2);
+
+      // Header says 99 (stale), body says 2 (current): the header still wins.
+      await expect(
+        service.updateResource(resource.id, { name: "stale header", version: 2 }, undefined, {
+          expectedVersion: 99
+        })
+      ).rejects.toMatchObject({ code: "RESOURCE_VERSION_CONFLICT" });
+    });
+
+    it("lets exactly one of two concurrent writers win; the loser gets a typed conflict", async () => {
+      const { service, resource } = await createResource();
+
+      const attempts = await Promise.allSettled([
+        service.updateResource(resource.id, { name: "writer A", version: 1 }),
+        service.updateResource(resource.id, { name: "writer B", version: 1 })
+      ]);
+      const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
+      const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      const conflict = (rejected[0] as PromiseRejectedResult).reason as {
+        code?: string;
+        statusCode?: number;
+        details?: Record<string, unknown>;
+      };
+      expect(conflict.code).toBe("RESOURCE_VERSION_CONFLICT");
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.details).toMatchObject({ expectedVersion: 1, currentVersion: 2 });
+
+      // No lost update: the stored state is exactly the winner's, at version 2.
+      const winner = (fulfilled[0] as PromiseFulfilledResult<{ name: string }>).value;
+      const final = await service.getResource(resource.id);
+      expect(final.version).toBe(2);
+      expect(final.name).toBe(winner.name);
+      expect(["writer A", "writer B"]).toContain(final.name);
+      const versions = await service.listResourceVersions(resource.id);
+      expect(versions).toHaveLength(2);
+    });
+
+    it("guards the delete lifecycle mutation with the same precondition", async () => {
+      const { service, resource } = await createResource();
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
+
+      await expect(
+        service.deleteResource(resource.id, undefined, { expectedVersion: 1 })
+      ).rejects.toMatchObject({
+        code: "RESOURCE_VERSION_CONFLICT",
+        details: { expectedVersion: 1, currentVersion: 2 }
+      });
+
+      const deleted = await service.deleteResource(resource.id, undefined, {
+        expectedVersion: 2
+      });
+      expect(deleted.status).toBe("inactive");
+      expect(deleted.version).toBe(3);
+    });
+
+    it("guards rollback with the same precondition and increments the version", async () => {
+      const { service, resource } = await createResource();
+      await service.updateResource(resource.id, { name: "v2", version: 1 });
+
+      await expect(
+        service.rollbackResource(resource.id, 1, undefined, { expectedVersion: 1 })
+      ).rejects.toMatchObject({
+        code: "RESOURCE_VERSION_CONFLICT",
+        details: { expectedVersion: 1, currentVersion: 2 }
+      });
+
+      const rolledBack = await service.rollbackResource(resource.id, 1, undefined, {
+        expectedVersion: 2
+      });
+      expect(rolledBack.resource.name).toBe("Paid Weather API");
+      expect(rolledBack.resource.version).toBe(3);
+      expect(rolledBack.version.version).toBe(3);
     });
   });
 });

@@ -55,6 +55,26 @@ deployments continue to use LBT for exact payments. To lock USDC as the only sup
 - MCP stdio: `pnpm start:mcp`
 - MCP Streamable HTTP: `pnpm start:mcp:http`
 
+## Configuration Reference
+
+Every runtime environment variable is documented in
+[`configuration-reference.md`](configuration-reference.md), generated from the
+authoritative config schema in `packages/shared/src/config.ts`. It lists each
+key with its type, required/optional status, default (or "no default"), owner,
+and sensitivity; secret values are shown as `<redacted>` and never printed.
+
+Regenerate it after any schema change:
+
+```bash
+pnpm config:reference
+```
+
+CI fails when the checked-in reference drifts from the schema:
+
+```bash
+pnpm config:reference:check
+```
+
 ## MCP Endpoint
 
 The MCP server exposes a single Streamable HTTP transport endpoint:

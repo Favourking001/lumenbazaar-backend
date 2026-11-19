@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 
 import { loadConfig } from "@lumenbazaar/shared";
+import {
+  runSecretProviderStartupChecks,
+  type SecretProviderHealthProbe,
+  type SecretProviderStartupReport
+} from "@lumenbazaar/stellar-payments";
 
 import {
   createReadinessService,
@@ -22,6 +27,37 @@ function probes(overrides: Partial<ReadinessProbes> = {}): ReadinessProbes {
     ...overrides
   };
 }
+
+/** Build a startup secret-provider report (issue #113) from check results. */
+function secretProviderReport(
+  results: SecretProviderStartupReport["results"]
+): SecretProviderStartupReport {
+  const blockedCapabilities = results
+    .filter((result) => !result.ok)
+    .map((result) => result.capability);
+  return {
+    results,
+    allOk: blockedCapabilities.length === 0,
+    blockedCapabilities
+  };
+}
+
+const passingSecretProviderReport = secretProviderReport([
+  {
+    ok: true,
+    capability: "facilitator_signer",
+    provider: "environment",
+    keyId: "v1:abcd1234",
+    latencyMs: 1
+  },
+  {
+    ok: true,
+    capability: "event_stream_signing",
+    provider: "environment",
+    keyId: "sha256:deadbeef0000",
+    latencyMs: 1
+  }
+]);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -223,10 +259,14 @@ describe("readiness service – probe outcomes", () => {
 
 describe("readiness service – degraded combinations", () => {
   it("all healthy → ok: true, all ready", async () => {
+    // Exact is requested so the signer is a required dependency; with the
+    // passing startup secret-provider report every check can be ready.
     const service = createReadinessService(
       loadConfig({ LUMEN_ENV: "testnet" }),
-      { exact: false, upto: false },
-      probes()
+      { exact: true, upto: false },
+      probes(),
+      undefined,
+      passingSecretProviderReport
     );
 
     const report = await service.evaluate();
@@ -483,6 +523,174 @@ describe("createStaticReadinessService", () => {
       { signer: { status: "not_configured" } }
     );
     const report = await service.evaluate();
+    expect(report.ok).toBe(false);
+  });
+});
+
+// ─── Startup secret-provider health checks (issue #113) ─────────────────────
+
+describe("readiness service – startup secret-provider checks", () => {
+  it("reports secretProviders ready when every startup check passed", async () => {
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: false, upto: false },
+      probes(),
+      undefined,
+      passingSecretProviderReport
+    );
+
+    const report = await service.evaluate();
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.secretProviders).toEqual({ status: "ready", latencyMs: 1 });
+  });
+
+  it("reports secretProviders not_required when no secret providers are configured", async () => {
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: false, upto: false },
+      probes(),
+      undefined,
+      secretProviderReport([])
+    );
+
+    const report = await service.evaluate();
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.secretProviders).toEqual({ status: "not_required" });
+  });
+
+  it("reports secretProviders not_required when no startup report was supplied", async () => {
+    const service = createReadinessService(loadConfig({}), { exact: false, upto: false }, probes());
+
+    const report = await service.evaluate();
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.secretProviders).toEqual({ status: "not_required" });
+  });
+
+  it("reports secretProviders unavailable with the stable failure reason and ok:false when a check failed", async () => {
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: false, upto: false },
+      probes(),
+      undefined,
+      secretProviderReport([
+        {
+          ok: true,
+          capability: "facilitator_signer",
+          provider: "environment",
+          keyId: "v1:abcd1234",
+          latencyMs: 1
+        },
+        {
+          ok: false,
+          capability: "event_stream_signing",
+          provider: "environment",
+          keyId: "sha256:deadbeef0000",
+          reason: "insufficient_permissions",
+          latencyMs: 2
+        }
+      ])
+    );
+
+    const report = await service.evaluate();
+
+    expect(report.ok).toBe(false);
+    expect(report.checks.secretProviders).toEqual({
+      status: "unavailable",
+      latencyMs: 2,
+      reason: "insufficient_permissions"
+    });
+  });
+
+  it("keeps unrelated checks ready when only a secret provider failed", async () => {
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: true, upto: false },
+      probes(),
+      undefined,
+      secretProviderReport([
+        {
+          ok: false,
+          capability: "event_stream_signing",
+          provider: "environment",
+          keyId: "sha256:deadbeef0000",
+          reason: "key_not_found",
+          latencyMs: 1
+        }
+      ])
+    );
+
+    const report = await service.evaluate();
+
+    expect(report.ok).toBe(false);
+    expect(report.checks.database.status).toBe("ready");
+    expect(report.checks.redis.status).toBe("ready");
+    expect(report.checks.signer.status).toBe("ready");
+    // The exact capability does not require the event-stream secret, so it
+    // stays available; only the failed capability is blocked (fail closed).
+    expect(report.capabilities.exact).toBe(true);
+  });
+
+  it("surfaces a failed facilitator signer startup check on the signer check instead of not_configured", async () => {
+    const readinessProbes = probes();
+    delete readinessProbes.signer;
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: true, upto: false },
+      readinessProbes,
+      undefined,
+      secretProviderReport([
+        {
+          ok: false,
+          capability: "facilitator_signer",
+          provider: "kms",
+          keyId: "arn:aws:kms:us-east-1:000000000000:key/fake-key-id",
+          reason: "insufficient_permissions",
+          latencyMs: 1
+        }
+      ])
+    );
+
+    const report = await service.evaluate();
+
+    expect(report.checks.signer).toEqual({
+      status: "unavailable",
+      reason: "insufficient_permissions"
+    });
+    expect(report.checks.secretProviders.status).toBe("unavailable");
+    expect(report.ok).toBe(false);
+    expect(report.capabilities.exact).toBe(false);
+  });
+
+  it("never surfaces raw provider error text or secret material in the report", async () => {
+    // Clearly fake secret material — never a real key. The fake probe throws
+    // it inside a raw provider error; only the stable reason code may reach
+    // the readiness report.
+    const fakeSecretSeed = `S${"A".repeat(55)}`;
+    const throwingProbe: SecretProviderHealthProbe = {
+      capability: "facilitator_signer",
+      provider: "kms",
+      keyId: "fake-key-id",
+      requiredPermissions: ["kms:DescribeKey"],
+      async checkHealth() {
+        throw new Error(`kms blew up with ${fakeSecretSeed}`);
+      }
+    };
+    const startupReport = await runSecretProviderStartupChecks([throwingProbe]);
+    const service = createReadinessService(
+      loadConfig({}),
+      { exact: false, upto: false },
+      probes(),
+      undefined,
+      startupReport
+    );
+
+    const report = await service.evaluate();
+
+    expect(JSON.stringify(report)).not.toContain(fakeSecretSeed);
+    expect(report.checks.secretProviders.reason).toBe("check_failed");
     expect(report.ok).toBe(false);
   });
 });
