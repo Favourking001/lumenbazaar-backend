@@ -9,79 +9,39 @@ import {
   type SellerStatusResolver,
   type WebhookEndpoint,
   type WebhookSecret,
-  WEBHOOK_SECRET_ROTATION_OVERLAP_SECONDS
+  WEBHOOK_SECRET_ROTATION_OVERLAP_SECONDS,
+  validateWebhookURLComprehensive,
+  validateSSRFURL,
+  isPrivateOrRestrictedIP,
 } from "@lumenbazaar/shared";
 
 import { type AuditLogService } from "./audit.js";
 
 /**
  * Validate that a webhook URL is safe from SSRF attacks.
- * - Must use HTTPS
- * - Must not contain credentials (user:pass)
- * - Must not resolve to private/loopback/link-local/metadata addresses
- * - Must not have redirects enabled on delivery
+ * Performs comprehensive checks including:
+ * - HTTPS-only enforcement
+ * - No embedded credentials
+ * - Private/loopback/link-local/metadata range filtering
+ * - Hostname format validation
+ * 
+ * Note: DNS resolution and rebinding detection happen on delivery,
+ * not during URL registration, to avoid validation delays and DNS-based DoS.
  *
  * @param urlString - The webhook URL to validate
- * @throws LumenError if URL is invalid
+ * @throws LumenError if URL is invalid or in restricted range
  */
 export function validateWebhookUrl(urlString: string): URL {
-  let url: URL;
-  try {
-    url = new URL(urlString);
-  } catch (e) {
-    throw new LumenError("VALIDATION_FAILED", "Webhook URL is not a valid URL.");
-  }
-
-  // Must use HTTPS
-  if (url.protocol !== "https:") {
-    throw new LumenError("VALIDATION_FAILED", "Webhook URL must use HTTPS protocol.");
-  }
-
-  // Must not contain credentials
-  if (url.username || url.password) {
-    throw new LumenError("VALIDATION_FAILED", "Webhook URL must not contain credentials.");
-  }
-
-  // Extract hostname for IP checking
-  const hostname = url.hostname;
-
-  // Check for private/loopback/link-local/metadata IP ranges
-  // IPv4: 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, 169.254.169.254 (metadata)
-  // IPv6: ::1 (loopback), fe80:: (link-local), fc00:: (ULA)
-  const privateIpPatterns = [
-    /^127\./, // Loopback
-    /^10\./, // Private
-    /^172\.(1[6-9]|2[0-9]|3[01])\./, // Private
-    /^192\.168\./, // Private
-    /^169\.254\./, // Link-local
-    /^::1$/, // IPv6 loopback
-    /^fe80:/, // IPv6 link-local
-    /^fc00:/, // IPv6 ULA
-    /^fd00:/ // IPv6 ULA
-  ];
-
-  if (privateIpPatterns.some((pattern) => pattern.test(hostname))) {
+  const validation = validateSSRFURL(urlString);
+  
+  if (!validation.valid) {
     throw new LumenError(
       "VALIDATION_FAILED",
-      "Webhook URL resolves to a private or loopback address."
+      validation.reason
     );
   }
 
-  // Reject localhost by name
-  if (
-    hostname === "localhost" ||
-    hostname === "localhost.localdomain" ||
-    hostname === "0.0.0.0" ||
-    hostname === "::" ||
-    hostname === "[::]"
-  ) {
-    throw new LumenError(
-      "VALIDATION_FAILED",
-      "Webhook URL resolves to localhost or all-hosts address."
-    );
-  }
-
-  return url;
+  return validation.url;
 }
 
 /**

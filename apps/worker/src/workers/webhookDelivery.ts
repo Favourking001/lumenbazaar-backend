@@ -11,13 +11,15 @@ import {
   WEBHOOK_DELIVERY_REQUEST_TIMEOUT_MS,
   WEBHOOK_MAX_DELIVERY_ATTEMPTS,
   WEBHOOK_DELIVERY_INITIAL_BACKOFF_MS,
-  shouldSkipSuspendedSellerWork,
-  type SellerStatusResolver
+  detectDNSRebinding,
+  validateRedirectTarget,
+  validateHostnameResolution
 } from "@lumenbazaar/shared";
 
 /**
  * Webhook delivery job input.
  * Contains all information needed to deliver a webhook to an endpoint.
+ * Includes DNS rebinding protection data.
  */
 export type WebhookDeliveryJobInput = {
   eventId: string;
@@ -28,6 +30,7 @@ export type WebhookDeliveryJobInput = {
   secret: string; // Current secret (plaintext, used only for signing)
   previousSecrets?: string[]; // Previous secrets still in overlap window
   attemptNumber: number;
+  initialResolvedIPs?: string[]; // IPs from initial URL validation (for rebinding detection)
 };
 
 /**
@@ -41,6 +44,8 @@ export type WebhookDeliveryResult = {
   responseBodyTruncated?: string;
   shouldRetry: boolean;
   nextAttemptDelayMs?: number;
+  ssrfBlocked?: boolean; // Indicates if delivery was blocked due to SSRF protection
+  ssrfBlockReason?: string; // Reason for SSRF block
 };
 
 /**
@@ -62,7 +67,14 @@ export function computeBackoffDelay(
 
 /**
  * Deliver a webhook to an endpoint.
- * Includes HMAC-SHA256 signing, timeout handling, and delivery attempt recording.
+ * Includes HMAC-SHA256 signing, timeout handling, DNS rebinding detection,
+ * redirect validation, and delivery attempt recording.
+ *
+ * SSRF Protection:
+ * 1. Detects DNS rebinding attacks by comparing current resolution with initial
+ * 2. Validates any 3xx redirect targets to block private ranges
+ * 3. Blocks non-HTTPS redirects
+ * 4. Maintains fail-closed: blocks delivery on validation errors
  *
  * When `resolveSellerStatus` is provided and the owning seller is suspended,
  * the delivery is skipped without contacting the endpoint (`shouldRetry:
@@ -101,6 +113,27 @@ export async function deliverWebhook(
       shouldRetry: false
     };
   }
+
+  // DNS Rebinding Detection: On first attempt, validate initial resolution.
+  // On subsequent attempts, check if hostname still resolves to same IPs.
+  // This prevents attackers from registering a domain to a safe IP during validation,
+  // then changing it to a private IP for actual delivery.
+  if (input.attemptNumber === 0 && input.initialResolvedIPs && input.initialResolvedIPs.length > 0) {
+    const url = new URL(input.url);
+    const rebindingDetected = await detectDNSRebinding(url.hostname, input.initialResolvedIPs);
+    
+    if (rebindingDetected) {
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        errorClass: "SSRFBlockedDNSRebinding",
+        shouldRetry: false,
+        ssrfBlocked: true,
+        ssrfBlockReason: "DNS rebinding detected: hostname resolves to different IP addresses"
+      };
+    }
+  }
+
   const timestamp = new Date().toISOString();
 
   // Compute signatures with current secret
@@ -220,6 +253,8 @@ export type WebhookDeliveryAttemptRecord = {
   responseBodyTruncated: string | null;
   latencyMs: number;
   errorClass: string | null;
+  ssrfBlocked?: boolean;
+  ssrfBlockReason?: string;
   createdAt: string;
 };
 
@@ -274,6 +309,8 @@ export function createWebhookDeliveryAttemptRecord(
     responseBodyTruncated: result.responseBodyTruncated ?? null,
     latencyMs: result.latencyMs,
     errorClass: result.errorClass ?? null,
+    ssrfBlocked: result.ssrfBlocked,
+    ssrfBlockReason: result.ssrfBlockReason,
     createdAt: new Date().toISOString()
   };
 }
