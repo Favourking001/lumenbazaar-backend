@@ -58,6 +58,26 @@ export class CapabilityUnavailableError extends McpError {
   }
 }
 
+export type ConcurrencyLimitScope = "client" | "global";
+
+/**
+ * Fail-closed rejection when a tool call would exceed the per-client or
+ * global MCP tool concurrency bound. The call never starts, so no
+ * payment flow runs and no capacity is consumed.
+ */
+export class ConcurrencyLimitError extends McpError {
+  constructor(scope: ConcurrencyLimitScope, details?: Record<string, unknown>) {
+    super(
+      "CONCURRENCY_LIMIT_EXCEEDED",
+      scope === "client"
+        ? "Too many concurrent tool calls for this client. Retry after an in-flight call finishes."
+        : "Too many concurrent tool calls. Retry after an in-flight call finishes.",
+      { scope, ...details }
+    );
+    this.name = "ConcurrencyLimitError";
+  }
+}
+
 /**
  * Map errors to structured MCP responses
  */

@@ -152,7 +152,15 @@ export const envSchema = z.object({
    */
   HORIZON_TRAVERSAL_MAX_PAGES: z.coerce.number().int().positive().default(100),
   HORIZON_TRAVERSAL_MAX_RECORDS: z.coerce.number().int().positive().default(1000),
-  HORIZON_TRAVERSAL_MAX_DURATION_MS: z.coerce.number().int().positive().default(30_000)
+  HORIZON_TRAVERSAL_MAX_DURATION_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * MCP tool execution concurrency bounds, separate from the HTTP
+   * request-rate limit in apps/mcp-server/src/http.ts. A single MCP
+   * client must not be able to consume all tool execution capacity
+   * with parallel calls.
+   */
+  MCP_TOOL_CONCURRENCY_PER_CLIENT: z.coerce.number().int().positive().default(5),
+  MCP_TOOL_CONCURRENCY_GLOBAL: z.coerce.number().int().positive().default(50)
 });
 
 export type RawEnv = z.input<typeof envSchema>;
@@ -261,6 +269,21 @@ export const configKeyMetadata: Record<keyof RawEnv, ConfigKeyMetadata> = {
     section: "api",
     description: "Public URL of the MCP Streamable HTTP endpoint.",
     notes: "Must not be a localhost or placeholder value in hosted environments."
+  },
+  MCP_TOOL_CONCURRENCY_PER_CLIENT: {
+    owner: "mcp-server",
+    sensitivity: "non-secret",
+    section: "api",
+    description:
+      "Maximum number of MCP tool calls executing concurrently for one client, keyed on the authenticated client identity where available.",
+    notes: "Separate from the HTTP request-rate limit. Must not exceed MCP_TOOL_CONCURRENCY_GLOBAL."
+  },
+  MCP_TOOL_CONCURRENCY_GLOBAL: {
+    owner: "mcp-server",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Maximum number of MCP tool calls executing concurrently across all clients.",
+    notes: "Separate from the HTTP request-rate limit."
   },
   CORS_ALLOWED_ORIGINS: {
     owner: "api",
@@ -528,6 +551,10 @@ export type AppConfig = {
   };
   mcp: {
     publicUrl: string;
+    toolConcurrency: {
+      perClient: number;
+      global: number;
+    };
   };
   databaseUrl: string;
   redisUrl: string;
@@ -658,7 +685,11 @@ export function loadConfig(
     },
 
     mcp: {
-      publicUrl: env.MCP_PUBLIC_URL
+      publicUrl: env.MCP_PUBLIC_URL,
+      toolConcurrency: {
+        perClient: env.MCP_TOOL_CONCURRENCY_PER_CLIENT,
+        global: env.MCP_TOOL_CONCURRENCY_GLOBAL
+      }
     },
     databaseUrl: env.DATABASE_URL,
     redisUrl: env.REDIS_URL,
@@ -723,6 +754,10 @@ function assertEnvironmentConfiguration(
     throw new Error(
       "STELLAR_INCLUSION_FEE_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
     );
+  }
+
+  if (env.MCP_TOOL_CONCURRENCY_PER_CLIENT > env.MCP_TOOL_CONCURRENCY_GLOBAL) {
+    throw new Error("MCP_TOOL_CONCURRENCY_PER_CLIENT must not exceed MCP_TOOL_CONCURRENCY_GLOBAL.");
   }
 
   const feeCeilingStroops =

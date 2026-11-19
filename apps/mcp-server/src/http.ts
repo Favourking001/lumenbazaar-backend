@@ -215,7 +215,12 @@ export async function startMcpHttpServer(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID()
   });
-  const mcpServer = createMcpServer({ client, capabilityProvider, metrics });
+  const mcpServer = createMcpServer({
+    client,
+    capabilityProvider,
+    metrics,
+    concurrencyLimits: config.mcp.toolConcurrency
+  });
 
   await mcpServer.connect(transport as unknown as Transport);
 
