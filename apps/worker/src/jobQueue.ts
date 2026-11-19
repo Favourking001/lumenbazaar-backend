@@ -1,6 +1,6 @@
 import { type Queue } from "bullmq";
 
-import { getTraceparent, type AppConfig } from "@lumenbazaar/shared";
+import { getTraceparent, type AppConfig, createJobEnvelope, schemaIds } from "@lumenbazaar/shared";
 import { settlementReconciliationJobId } from "@lumenbazaar/stellar-payments";
 
 import { createBullMqQueue, queueNames } from "./queues.js";
@@ -12,9 +12,13 @@ import { type ReceiptFinalizerJobData } from "./workers/receiptFinalizer.js";
 import { type StalePaymentCleanupJobData } from "./workers/stalePaymentCleanup.js";
 import { type WebhookDeliveryJobInput } from "./workers/webhookDelivery.js";
 
-function withTraceparent<T extends object>(data: T): T {
+function createEnvelopeWithTraceparent<T extends { schemaId?: string; schemaVersion?: string }>(
+  payload: T,
+  schemaId: string
+): Record<string, unknown> {
   const traceparent = getTraceparent();
-  return traceparent === undefined ? data : Object.assign({}, data, { traceparent });
+  const envelope = createJobEnvelope(schemaId as any, payload as any, traceparent);
+  return envelope;
 }
 
 export type JobQueues = {
@@ -48,7 +52,8 @@ export async function enqueueSettlementConfirmation(
   data: SettlementConfirmationJobData,
   { delayMs = 5000, maxAttempts = 8 } = {}
 ) {
-  return queue.add("settlement-confirmation", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.settlementConfirmation);
+  return queue.add("settlement-confirmation", envelope, {
     jobId: settlementReconciliationJobId(data.paymentAttemptId),
     delay: delayMs,
     attempts: maxAttempts,
@@ -66,7 +71,8 @@ export async function enqueueResourceIndexing(
   data: ResourceIndexingJobData,
   { delayMs = 1000, maxAttempts = 5 } = {}
 ) {
-  return queue.add("resource-indexing", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.resourceIndexing);
+  return queue.add("resource-indexing", envelope, {
     attempts: maxAttempts,
     backoff: {
       type: "exponential",
@@ -82,7 +88,8 @@ export async function enqueueSearchSync(
   data: SearchSyncJobData,
   { delayMs = 1000, maxAttempts = 3 } = {}
 ) {
-  return queue.add("search-sync", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.searchSync);
+  return queue.add("search-sync", envelope, {
     attempts: maxAttempts,
     backoff: {
       type: "exponential",
@@ -98,7 +105,8 @@ export async function enqueueNetworkHealth(
   data: NetworkHealthJobData,
   { delayMs = 30000, maxAttempts = 3 } = {}
 ) {
-  return queue.add("network-health", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.networkHealth);
+  return queue.add("network-health", envelope, {
     attempts: maxAttempts,
     backoff: {
       type: "exponential",
@@ -114,7 +122,8 @@ export async function enqueueReceiptFinalizer(
   data: ReceiptFinalizerJobData,
   { delayMs = 10000, maxAttempts = 3 } = {}
 ) {
-  return queue.add("receipt-finalizer", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.receiptFinalizer);
+  return queue.add("receipt-finalizer", envelope, {
     attempts: maxAttempts,
     backoff: {
       type: "exponential",
@@ -130,7 +139,8 @@ export async function enqueueStalePaymentCleanup(
   data: StalePaymentCleanupJobData,
   { delayMs = 60000, maxAttempts = 2 } = {}
 ) {
-  return queue.add("stale-payment-cleanup", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.stalePaymentCleanup);
+  return queue.add("stale-payment-cleanup", envelope, {
     attempts: maxAttempts,
     backoff: {
       type: "exponential",
@@ -149,7 +159,8 @@ export async function enqueueWebhookDelivery(
   // Use stable job ID based on eventId + endpointId for idempotency
   const jobId = `${data.eventId}:${data.endpointId}:attempt-${data.attemptNumber}`;
 
-  return queue.add("webhook-delivery", withTraceparent(data), {
+  const envelope = createEnvelopeWithTraceparent(data, schemaIds.webhookDelivery);
+  return queue.add("webhook-delivery", envelope, {
     jobId,
     delay: delayMs,
     attempts: 1, // Single attempt per job; retries are queued as new jobs
