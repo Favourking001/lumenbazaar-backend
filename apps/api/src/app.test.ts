@@ -239,12 +239,19 @@ describe("API server base", () => {
     const ready = await app.inject({ method: "GET", url: "/ready" });
     const body = ready.body;
 
-    // Must never contain anything that could leak sensitive data
+    // Must never contain anything that could leak sensitive data. The
+    // `secretProviders` check name itself contains the word "secret", so the
+    // guard asserts against secret *values* (and key=value patterns) rather
+    // than the bare word.
     expect(body).not.toMatch(/postgresql:\/\//);
     expect(body).not.toMatch(/redis:\/\//);
     expect(body).not.toMatch(/password/i);
-    expect(body).not.toMatch(/secret/i);
+    expect(body).not.toMatch(/secret\s*[=:]/i);
     expect(body).not.toMatch(/ECONNREFUSED/);
+    const configuredEventStreamSecret = process.env.EVENT_STREAM_SIGNING_SECRET;
+    if (configuredEventStreamSecret !== undefined && configuredEventStreamSecret.length > 0) {
+      expect(body).not.toContain(configuredEventStreamSecret);
+    }
     await app.close();
   });
 

@@ -21,7 +21,8 @@ import {
   createPaymentPersistence,
   createRuntimePaymentReconciliation,
   createX402StellarAdapter,
-  type FacilitatorSignerProvider
+  type FacilitatorSignerProvider,
+  type SecretProviderStartupReport
 } from "@lumenbazaar/stellar-payments";
 
 import { registerErrorHandling } from "./http/errors.js";
@@ -54,6 +55,7 @@ import { createRuntimeRateLimitService, type RateLimitService } from "./services
 import {
   createReadinessService,
   createRuntimeReadinessProbes,
+  defaultProbeTimeoutMs,
   type PaymentCapabilities,
   type ReadinessService
 } from "./services/readiness.js";
@@ -106,6 +108,15 @@ export type BuildApiAppOptions = {
   readinessService?: ReadinessService;
   signerProvider?: FacilitatorSignerProvider;
   /**
+   * Startup secret-provider health check report (issue #113), produced in
+   * `main.ts` before the app is built. It is forwarded to the readiness
+   * service so a failed provider check is visible on `/ready`, and it gates
+   * the event-stream signing secret: when the `event_stream_signing` check
+   * failed, authenticated receipt streams are disabled (fail closed) even
+   * though the secret is configured.
+   */
+  secretProviderStartupReport?: SecretProviderStartupReport;
+  /**
    * Pre-built capability registry.  Injected by tests that need fine-grained
    * control over which schemes are reported as supported without running real
    * adapter startup checks.
@@ -146,7 +157,9 @@ export function buildApiApp(options: BuildApiAppOptions = {}) {
     createReadinessService(
       config,
       paymentCapabilities,
-      createRuntimeReadinessProbes(config, options.signerProvider)
+      createRuntimeReadinessProbes(config, options.signerProvider),
+      defaultProbeTimeoutMs,
+      options.secretProviderStartupReport
     );
 
   void app.register(cors, {
@@ -331,9 +344,17 @@ export function buildApiApp(options: BuildApiAppOptions = {}) {
       }
     );
 
+  // A failed event-stream signing secret startup check disables authenticated
+  // receipt streams (fail closed) even though the secret is configured.
+  // The failure stays visible on `/ready` via the `secretProviders` check.
+  const eventStreamSigningBlocked =
+    options.secretProviderStartupReport?.blockedCapabilities.includes("event_stream_signing") ??
+    false;
   const streamAccessService =
     options.streamAccessService ??
-    new StreamAccessService({ signingSecret: config.eventStreams.signingSecret });
+    new StreamAccessService({
+      signingSecret: eventStreamSigningBlocked ? undefined : config.eventStreams.signingSecret
+    });
   const receiptStatusStreams =
     options.receiptStatusStreamService ??
     new ReceiptStatusStreamService({

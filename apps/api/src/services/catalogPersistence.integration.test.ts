@@ -93,7 +93,8 @@ describePostgres("durable catalog persistence", () => {
     });
 
     const updated = await restartedResources.updateResource(resource.id, {
-      description: "Counts words, characters, and sentences in supplied text."
+      description: "Counts words, characters, and sentences in supplied text.",
+      version: 1
     });
     await expect(
       client.resourceVersion.count({ where: { resourceId: resource.id } })
@@ -102,7 +103,9 @@ describePostgres("durable catalog persistence", () => {
       client.searchDocument.findUniqueOrThrow({ where: { resourceId: resource.id } })
     ).resolves.toMatchObject({ stale: true });
     await restartedSearch.indexResource(updated);
-    await restartedResources.deleteResource(resource.id);
+    await restartedResources.deleteResource(resource.id, undefined, {
+      expectedVersion: 2
+    });
 
     await expect(new DiscoveryService(restartedResources).browse({})).resolves.toMatchObject({
       resources: []
@@ -115,6 +118,71 @@ describePostgres("durable catalog persistence", () => {
     await expect(client.catalogEvent.count({ where: { resourceId: resource.id } })).resolves.toBe(
       1
     );
+  });
+
+  it("rejects a stale concurrent update without losing the winner's write (issue #102)", async () => {
+    const config = loadConfig({});
+    const indexingQueue = new InMemoryResourceIndexingQueue();
+    const sellerService = new SellerService(new PrismaSellerStore(client));
+    const resourceService = new ResourceService(
+      config,
+      sellerService,
+      new PrismaResourceStore(client),
+      indexingQueue
+    );
+    const seller = await sellerService.createSeller({
+      displayName: "Concurrent Tools",
+      walletAddress: localIssuerPublicKey,
+      domain: "concurrent.example"
+    });
+    const resource = await resourceService.createResource(resourceInput(seller.id));
+    expect(resource.version).toBe(1);
+
+    // Two writers race with the same expected version: exactly one may win.
+    const attempts = await Promise.allSettled([
+      resourceService.updateResource(resource.id, { name: "writer A" }, undefined, {
+        expectedVersion: 1
+      }),
+      resourceService.updateResource(resource.id, { name: "writer B" }, undefined, {
+        expectedVersion: 1
+      })
+    ]);
+    const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
+    const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const conflict = (rejected[0] as PromiseRejectedResult).reason as {
+      code?: string;
+      statusCode?: number;
+      details?: Record<string, unknown>;
+    };
+    expect(conflict.code).toBe("RESOURCE_VERSION_CONFLICT");
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.details).toMatchObject({ expectedVersion: 1, currentVersion: 2 });
+
+    // No lost update: the stored row is exactly the winner's, at version 2,
+    // and the history gained exactly one version.
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ name: string }>).value;
+    const stored = await client.resource.findUniqueOrThrow({ where: { id: resource.id } });
+    expect(stored.version).toBe(2);
+    expect(stored.name).toBe(winner.name);
+    await expect(resourceService.getResource(resource.id)).resolves.toMatchObject({
+      version: 2,
+      name: winner.name
+    });
+    await expect(
+      client.resourceVersion.count({ where: { resourceId: resource.id } })
+    ).resolves.toBe(2);
+
+    // A stale writer that re-reads first can still succeed with the new version.
+    const retried = await resourceService.updateResource(
+      resource.id,
+      { name: "writer C" },
+      undefined,
+      { expectedVersion: 2 }
+    );
+    expect(retried.version).toBe(3);
   });
 });
 

@@ -5,7 +5,7 @@
     "version": "0.1.0",
     "description": "Facilitator, seller catalog, discovery, and conformance APIs for LumenBazaar.",
     "x-release": {
-      "commit": "737e891baa49e202a7f4f4d8424177f0c7b99c43",
+      "commit": "395f7f81994ad833f6e1c0ccdb6f22f7f8f71abd",
       "version": "0.1.0",
       "protocol": "stellar-x402",
       "x402Version": 2,
@@ -221,6 +221,7 @@
                         "stellarRpc",
                         "horizon",
                         "signer",
+                        "secretProviders",
                         "migrations",
                         "assets"
                       ],
@@ -349,6 +350,32 @@
                               "description": "Stable, generic reason code. Never includes raw error messages, hostnames, credentials, or stack traces."
                             }
                           }
+                        },
+                        "secretProviders": {
+                          "type": "object",
+                          "required": ["status"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "ready",
+                                "unavailable",
+                                "timeout",
+                                "not_configured",
+                                "not_required"
+                              ]
+                            },
+                            "latencyMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Elapsed probe time in ms. Omitted when status is not_required or not_configured."
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "Stable, generic reason code. Never includes raw error messages, hostnames, credentials, or stack traces."
+                            }
+                          },
+                          "description": "Startup secret-provider health checks (facilitator signer, event-stream signing secret). `not_required` when no secret providers are configured; `unavailable` with a stable failure reason code when any configured provider failed its startup check."
                         },
                         "migrations": {
                           "type": "object",
@@ -481,6 +508,7 @@
                         "stellarRpc",
                         "horizon",
                         "signer",
+                        "secretProviders",
                         "migrations",
                         "assets"
                       ],
@@ -609,6 +637,32 @@
                               "description": "Stable, generic reason code. Never includes raw error messages, hostnames, credentials, or stack traces."
                             }
                           }
+                        },
+                        "secretProviders": {
+                          "type": "object",
+                          "required": ["status"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "ready",
+                                "unavailable",
+                                "timeout",
+                                "not_configured",
+                                "not_required"
+                              ]
+                            },
+                            "latencyMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Elapsed probe time in ms. Omitted when status is not_required or not_configured."
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "Stable, generic reason code. Never includes raw error messages, hostnames, credentials, or stack traces."
+                            }
+                          },
+                          "description": "Startup secret-provider health checks (facilitator signer, event-stream signing secret). `not_required` when no secret providers are configured; `unavailable` with a stable failure reason code when any configured provider failed its startup check."
                         },
                         "migrations": {
                           "type": "object",
@@ -3882,6 +3936,15 @@
         "operationId": "listResources",
         "summary": "List catalog resources.",
         "tags": ["resources"],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Conditional request (RFC 9110): one or more ETags, `*`, or a weak tag (`W/\"...\"`). When the current representation matches, the server returns 304 Not Modified with no body.",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -3901,6 +3964,14 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
@@ -3951,6 +4022,11 @@
                           "outputSchema": { "type": "object", "additionalProperties": true },
                           "extensions": { "type": "object", "additionalProperties": true },
                           "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                          },
                           "createdAt": { "type": "string", "format": "date-time" },
                           "updatedAt": { "type": "string", "format": "date-time" }
                         }
@@ -3959,6 +4035,19 @@
                     "nextCursor": { "type": ["string", "null"] }
                   }
                 }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified. The representation has not changed since the ETag supplied in If-None-Match. The response has no body; ETag and Cache-Control are repeated.",
+            "headers": {
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             }
           },
@@ -4093,6 +4182,11 @@
                   "outputSchema": { "type": "object", "additionalProperties": true },
                   "extensions": { "type": "object", "additionalProperties": true },
                   "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                  },
                   "createdAt": { "type": "string", "format": "date-time" },
                   "updatedAt": { "type": "string", "format": "date-time" }
                 }
@@ -4160,6 +4254,11 @@
                     "outputSchema": { "type": "object", "additionalProperties": true },
                     "extensions": { "type": "object", "additionalProperties": true },
                     "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                    },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
                   }
@@ -4259,6 +4358,15 @@
         "operationId": "getResource",
         "summary": "Fetch a paid resource by ID.",
         "tags": ["resources"],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Conditional request (RFC 9110): one or more ETags, `*`, or a weak tag (`W/\"...\"`). When the current representation matches, the server returns 304 Not Modified with no body.",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -4278,6 +4386,14 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
@@ -4319,10 +4435,28 @@
                     "outputSchema": { "type": "object", "additionalProperties": true },
                     "extensions": { "type": "object", "additionalProperties": true },
                     "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                    },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
                   }
                 }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified. The representation has not changed since the ETag supplied in If-None-Match. The response has no body; ETag and Cache-Control are repeated.",
+            "headers": {
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             }
           },
@@ -4414,32 +4548,24 @@
       },
       "patch": {
         "operationId": "updateResource",
-        "summary": "Update mutable paid resource fields.",
+        "summary": "Update mutable paid resource fields. Requires an optimistic-concurrency precondition: the version read, in the If-Match header or the version body field. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
         "tags": ["resources"],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Expected current resource version, as a bare integer (If-Match: 3) or a quoted strong entity tag (If-Match: \"3\").",
+            "schema": { "type": "string", "pattern": "^\"?[1-9][0-9]*\"?$" }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "id",
-                  "sellerId",
-                  "type",
-                  "name",
-                  "description",
-                  "url",
-                  "routeTemplate",
-                  "network",
-                  "payTo",
-                  "assetCode",
-                  "assetIssuer",
-                  "amount",
-                  "inputSchema",
-                  "outputSchema",
-                  "extensions",
-                  "status"
-                ],
+                "description": "Partial resource fields to update, plus the optimistic-concurrency precondition. Every field except version is optional; version is the expected current resource version and is required unless If-Match is sent.",
                 "properties": {
                   "id": { "type": "string" },
                   "sellerId": { "type": "string" },
@@ -4457,6 +4583,11 @@
                   "outputSchema": { "type": "object", "additionalProperties": true },
                   "extensions": { "type": "object", "additionalProperties": true },
                   "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Expected current resource version. Required unless the If-Match header is sent; the header wins when both are sent."
+                  },
                   "createdAt": { "type": "string", "format": "date-time" },
                   "updatedAt": { "type": "string", "format": "date-time" }
                 }
@@ -4524,8 +4655,55 @@
                     "outputSchema": { "type": "object", "additionalProperties": true },
                     "extensions": { "type": "object", "additionalProperties": true },
                     "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                    },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict. The resource was modified by another writer after the version the caller read. The error body uses code RESOURCE_VERSION_CONFLICT and carries expectedVersion and currentVersion in details; re-read the resource and retry with the current version.",
+            "headers": {
+              "x-ratelimit-limit": {
+                "description": "Maximum number of requests allowed in the current rate limit window.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Number of requests remaining in the current rate limit window. Zero means limit reached.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-reset": {
+                "description": "ISO 8601 timestamp when the current rate limit window resets.",
+                "schema": { "type": "string", "format": "date-time" }
+              },
+              "retry-after": {
+                "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
+                "schema": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "error"],
+                  "properties": {
+                    "ok": { "type": "boolean", "enum": [false] },
+                    "error": {
+                      "type": "object",
+                      "required": ["code", "message"],
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" },
+                        "details": { "type": "object", "additionalProperties": true }
+                      }
+                    },
+                    "requestId": { "type": "string" }
                   }
                 }
               }
@@ -4619,8 +4797,17 @@
       },
       "delete": {
         "operationId": "deleteResource",
-        "summary": "Deactivate a paid resource.",
+        "summary": "Deactivate a paid resource. Requires an optimistic-concurrency precondition: the version read, in the If-Match header. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
         "tags": ["resources"],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Expected current resource version, as a bare integer (If-Match: 3) or a quoted strong entity tag (If-Match: \"3\").",
+            "schema": { "type": "string", "pattern": "^\"?[1-9][0-9]*\"?$" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -4681,8 +4868,55 @@
                     "outputSchema": { "type": "object", "additionalProperties": true },
                     "extensions": { "type": "object", "additionalProperties": true },
                     "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                    },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict. The resource was modified by another writer after the version the caller read. The error body uses code RESOURCE_VERSION_CONFLICT and carries expectedVersion and currentVersion in details; re-read the resource and retry with the current version.",
+            "headers": {
+              "x-ratelimit-limit": {
+                "description": "Maximum number of requests allowed in the current rate limit window.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Number of requests remaining in the current rate limit window. Zero means limit reached.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-reset": {
+                "description": "ISO 8601 timestamp when the current rate limit window resets.",
+                "schema": { "type": "string", "format": "date-time" }
+              },
+              "retry-after": {
+                "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
+                "schema": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "error"],
+                  "properties": {
+                    "ok": { "type": "boolean", "enum": [false] },
+                    "error": {
+                      "type": "object",
+                      "required": ["code", "message"],
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" },
+                        "details": { "type": "object", "additionalProperties": true }
+                      }
+                    },
+                    "requestId": { "type": "string" }
                   }
                 }
               }
@@ -4799,6 +5033,14 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "cache-control": {
+                "description": "Cache-Control for an authorization-specific response: private, no-store. The response varies by credentials and must not be stored by shared caches.",
+                "schema": { "type": "string" }
+              },
+              "vary": {
+                "description": "Vary: X-Api-Key. The response depends on the seller API key presented, so caches must not share it across credentials.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
@@ -4937,6 +5179,14 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "cache-control": {
+                "description": "Cache-Control for an authorization-specific response: private, no-store. The response varies by credentials and must not be stored by shared caches.",
+                "schema": { "type": "string" }
+              },
+              "vary": {
+                "description": "Vary: X-Api-Key. The response depends on the seller API key presented, so caches must not share it across credentials.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
@@ -5045,8 +5295,17 @@
     "/v1/resources/{id}/rollback": {
       "post": {
         "operationId": "rollbackResource",
-        "summary": "Roll back a resource to a historical version, creating a new immutable version.",
+        "summary": "Roll back a resource to a historical version, creating a new immutable version. Requires an optimistic-concurrency precondition: the version read, in the If-Match header. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
         "tags": ["resources"],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Expected current resource version, as a bare integer (If-Match: 3) or a quoted strong entity tag (If-Match: \"3\").",
+            "schema": { "type": "string", "pattern": "^\"?[1-9][0-9]*\"?$" }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -5132,6 +5391,11 @@
                         "outputSchema": { "type": "object", "additionalProperties": true },
                         "extensions": { "type": "object", "additionalProperties": true },
                         "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+                        },
                         "createdAt": { "type": "string", "format": "date-time" },
                         "updatedAt": { "type": "string", "format": "date-time" }
                       }
@@ -5147,6 +5411,48 @@
                         "createdAt": { "type": "string", "format": "date-time" }
                       }
                     }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict. The resource was modified by another writer after the version the caller read. The error body uses code RESOURCE_VERSION_CONFLICT and carries expectedVersion and currentVersion in details; re-read the resource and retry with the current version.",
+            "headers": {
+              "x-ratelimit-limit": {
+                "description": "Maximum number of requests allowed in the current rate limit window.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Number of requests remaining in the current rate limit window. Zero means limit reached.",
+                "schema": { "type": "integer" }
+              },
+              "x-ratelimit-reset": {
+                "description": "ISO 8601 timestamp when the current rate limit window resets.",
+                "schema": { "type": "string", "format": "date-time" }
+              },
+              "retry-after": {
+                "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
+                "schema": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "error"],
+                  "properties": {
+                    "ok": { "type": "boolean", "enum": [false] },
+                    "error": {
+                      "type": "object",
+                      "required": ["code", "message"],
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" },
+                        "details": { "type": "object", "additionalProperties": true }
+                      }
+                    },
+                    "requestId": { "type": "string" }
                   }
                 }
               }
@@ -5263,6 +5569,14 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "cache-control": {
+                "description": "Cache-Control for an authorization-specific response: private, no-store. The response varies by credentials and must not be stored by shared caches.",
+                "schema": { "type": "string" }
+              },
+              "vary": {
+                "description": "Vary: X-Api-Key. The response depends on the seller API key presented, so caches must not share it across credentials.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
@@ -5361,6 +5675,15 @@
         "operationId": "browseDiscoveryResources",
         "summary": "Browse discoverable paid resources.",
         "tags": ["discovery"],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Conditional request (RFC 9110): one or more ETags, `*`, or a weak tag (`W/\"...\"`). When the current representation matches, the server returns 304 Not Modified with no body.",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -5380,10 +5703,31 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
               "application/json": { "schema": { "type": "object", "additionalProperties": true } }
+            }
+          },
+          "304": {
+            "description": "Not Modified. The representation has not changed since the ETag supplied in If-None-Match. The response has no body; ETag and Cache-Control are repeated.",
+            "headers": {
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
+              }
             }
           },
           "429": {
@@ -5478,6 +5822,15 @@
         "operationId": "searchDiscoveryResources",
         "summary": "Search paid resources by query and filters.",
         "tags": ["discovery"],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Conditional request (RFC 9110): one or more ETags, `*`, or a weak tag (`W/\"...\"`). When the current representation matches, the server returns 304 Not Modified with no body.",
+            "schema": { "type": "string" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response",
@@ -5497,10 +5850,31 @@
               "retry-after": {
                 "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
                 "schema": { "type": "integer", "minimum": 1 }
+              },
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
               }
             },
             "content": {
               "application/json": { "schema": { "type": "object", "additionalProperties": true } }
+            }
+          },
+          "304": {
+            "description": "Not Modified. The representation has not changed since the ETag supplied in If-None-Match. The response has no body; ETag and Cache-Control are repeated.",
+            "headers": {
+              "etag": {
+                "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+                "schema": { "type": "string" }
+              },
+              "cache-control": {
+                "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+                "schema": { "type": "string" }
+              }
             }
           },
           "429": {
@@ -6580,6 +6954,18 @@
       "Retry-After": {
         "description": "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
         "schema": { "type": "integer", "minimum": 1 }
+      },
+      "ETag": {
+        "description": "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+        "schema": { "type": "string" }
+      },
+      "Cache-Control": {
+        "description": "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+        "schema": { "type": "string" }
+      },
+      "Vary": {
+        "description": "Vary: X-Api-Key. The response depends on the seller API key presented, so caches must not share it across credentials.",
+        "schema": { "type": "string" }
       }
     }
   },
