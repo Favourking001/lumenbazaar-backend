@@ -1,5 +1,14 @@
 export const sellerSdkPackage = "@lumenbazaar/seller-sdk";
 
+// Optimistic concurrency exports (issue #102)
+export {
+  assertExpectedVersion,
+  ifMatchHeader,
+  isResourceVersionConflict,
+  parseIfMatchHeader,
+  withExpectedVersion
+} from "./optimisticConcurrency.js";
+
 // Middleware exports
 export {
   createPaymentRequired,

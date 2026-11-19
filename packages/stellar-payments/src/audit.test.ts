@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "@lumenbazaar/shared";
-import { createTestPaymentRequest, testPaymentConfigEnv } from "@lumenbazaar/testkit";
+import {
+  createTestPaymentRequest,
+  stubQuoteSettlementFee,
+  testPaymentConfigEnv
+} from "@lumenbazaar/testkit";
 
 import { InMemoryPaymentAttemptStore } from "./paymentAttemptStore.js";
 import { SettlementService } from "./settlement.js";
@@ -27,6 +31,7 @@ describe("payment audit logging", () => {
           adapter: "@x402/stellar"
         };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact() {
         return {
           transactionHash: "tx_audit",

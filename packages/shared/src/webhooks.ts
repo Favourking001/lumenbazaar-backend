@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import type { SettlementStatus, NetworkId } from "./models.js";
 
@@ -43,7 +44,7 @@ const ALLOWED_PAYLOAD_FIELDS = [
   "assetIssuer",
   "transactionHash",
   "failureCode",
-  "failureReason",
+  "failureReason"
 ] as const;
 
 export type AllowedPayloadField = (typeof ALLOWED_PAYLOAD_FIELDS)[number];
@@ -59,19 +60,12 @@ export const webhookPayloadSchema = z.object({
     "settlement.pending",
     "settlement.finalized",
     "settlement.failed",
-    "settlement.reconciled",
+    "settlement.reconciled"
   ]),
   timestamp: z.string().datetime().describe("ISO 8601 timestamp (UTC)"),
   paymentId: z.string().describe("Payment attempt ID"),
   settlementId: z.string().describe("Settlement record ID"),
-  status: z.enum([
-    "pending",
-    "submitted",
-    "confirmed",
-    "settled",
-    "timed_out",
-    "failed",
-  ] as const),
+  status: z.enum(["pending", "submitted", "confirmed", "settled", "timed_out", "failed"] as const),
   network: z.string().describe("Network identifier (testnet, mainnet)"),
   amount: z.string().describe("Settlement amount in stroops"),
   assetCode: z.string().describe("Stellar asset code"),
@@ -80,17 +74,27 @@ export const webhookPayloadSchema = z.object({
     .string()
     .optional()
     .describe("Stellar transaction hash (null until confirmed)"),
-  failureCode: z
-    .string()
-    .optional()
-    .describe("Machine-readable failure code if status is failed"),
-  failureReason: z
-    .string()
-    .optional()
-    .describe("Human-readable failure reason if status is failed"),
+  failureCode: z.string().optional().describe("Machine-readable failure code if status is failed"),
+  failureReason: z.string().optional().describe("Human-readable failure reason if status is failed")
 });
 
 export type WebhookPayload = z.infer<typeof webhookPayloadSchema>;
+
+export const WEBHOOK_MAX_PAYLOAD_BYTES = 16 * 1024;
+
+export class WebhookPayloadTooLarge extends Error {
+  constructor(readonly bytes: number) {
+    super("Webhook payload exceeds the UTF-8 byte budget");
+    this.name = "WebhookPayloadTooLarge";
+  }
+}
+
+export function serializeWebhookPayload(payload: WebhookPayload): string {
+  const body = JSON.stringify(payload);
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes > WEBHOOK_MAX_PAYLOAD_BYTES) throw new WebhookPayloadTooLarge(bytes);
+  return body;
+}
 
 /**
  * Build a webhook payload from a settlement record.
@@ -130,7 +134,7 @@ export function buildWebhookPayload(
     network: settlement.network,
     amount: settlement.amount,
     assetCode: settlement.assetCode,
-    assetIssuer: settlement.assetIssuer,
+    assetIssuer: settlement.assetIssuer
   };
 
   // Only include optional fields if they have values
@@ -144,7 +148,9 @@ export function buildWebhookPayload(
     payload.failureReason = settlement.failureReason;
   }
 
-  return webhookPayloadSchema.parse(payload);
+  const validated = webhookPayloadSchema.parse(payload);
+  serializeWebhookPayload(validated);
+  return validated;
 }
 
 /**
@@ -177,8 +183,6 @@ export function computeWebhookSignature(
   timestamp: string,
   rawBody: string
 ): string {
-  const crypto = require("crypto");
-
   // Decode secret if base64 (attempt; if fails, treat as raw string)
   let secretBytes: Buffer;
   try {
@@ -242,6 +246,9 @@ export function verifyWebhookSignature(
   const nowTime = clock?.now() ?? Date.now();
 
   // Parse and validate timestamp
+  replayWindowSeconds: number = 300
+): boolean {
+  // Verify timestamp is within replay window
   const receivedTime = new Date(timestamp);
   if (isNaN(receivedTime.getTime())) {
     return {

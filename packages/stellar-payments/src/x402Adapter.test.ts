@@ -67,6 +67,7 @@ describe("default x402 Stellar adapter", () => {
       valid: false
     });
     expect(adapter.settleExact).toBeUndefined();
+    expect(adapter.quoteSettlementFee).toBeUndefined();
   });
 });
 
@@ -87,6 +88,26 @@ describe("official x402 Stellar adapter", () => {
       inclusionFeeStroops: 100
     });
     expect(verify).toHaveBeenCalledWith(testPaymentPayload, testPaymentRequirement);
+  });
+
+  it("quotes the settlement fee through the configured fee quoter", async () => {
+    const quoteSettlementFee = vi.fn(async () => ({
+      feeStroops: 12_345,
+      resourceFeeStroops: 12_245,
+      inclusionFeeStroops: 100
+    }));
+    const adapter = createX402StellarAdapter({
+      config,
+      signerProvider,
+      feeQuoter: { quoteSettlementFee }
+    });
+
+    await expect(adapter.quoteSettlementFee?.(verificationInput)).resolves.toEqual({
+      feeStroops: 12_345,
+      resourceFeeStroops: 12_245,
+      inclusionFeeStroops: 100
+    });
+    expect(quoteSettlementFee).toHaveBeenCalledWith(verificationInput);
   });
 
   it.each([

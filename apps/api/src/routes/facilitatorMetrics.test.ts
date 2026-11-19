@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { loadConfig } from "@lumenbazaar/shared";
-import { createTestPaymentRequest, testPaymentConfigEnv } from "@lumenbazaar/testkit";
+import {
+  createTestPaymentRequest,
+  stubQuoteSettlementFee,
+  testPaymentConfigEnv
+} from "@lumenbazaar/testkit";
 import {
   InMemoryPaymentAttemptStore,
   PaymentVerificationService,
@@ -23,6 +27,7 @@ describe("facilitator metrics", () => {
           adapter: "@x402/stellar"
         };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact() {
         return {
           transactionHash: "tx_metrics",

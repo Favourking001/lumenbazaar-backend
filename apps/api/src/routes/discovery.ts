@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { type SellerApiKeyPrincipal } from "@lumenbazaar/shared";
 
+import { sendConditionalGet } from "../http/conditional.js";
 import { parseBody } from "../http/validation.js";
 import { type CatalogService } from "../services/cataloging.js";
 import { type CatalogValidationService } from "../services/catalogValidation.js";
@@ -17,11 +18,13 @@ export type DiscoveryRouteOptions = {
 };
 
 export function registerDiscoveryRoutes(app: FastifyInstance, options: DiscoveryRouteOptions) {
-  app.get("/v1/discovery/resources", async (request) =>
-    options.discoveryService.browse(request.query)
+  app.get("/v1/discovery/resources", async (request, reply) =>
+    sendConditionalGet(request, reply, await options.discoveryService.browse(request.query))
   );
 
-  app.get("/v1/discovery/search", async (request) => options.searchService.search(request.query));
+  app.get("/v1/discovery/search", async (request, reply) =>
+    sendConditionalGet(request, reply, await options.searchService.search(request.query))
+  );
 
   app.post("/v1/discovery/validate", async (request) =>
     options.catalogValidationService.validate(parseBody(request, z.unknown()))
@@ -33,15 +36,14 @@ export function registerDiscoveryRoutes(app: FastifyInstance, options: Discovery
 
   // Authenticated seller catalog endpoint
   app.post("/v1/sellers/:sellerId/catalog", async (request) =>
-    options.catalogService.catalog(
-      parseBody(request, z.unknown()),
-      getSellerContext(request)
-    )
+    options.catalogService.catalog(parseBody(request, z.unknown()), getSellerContext(request))
   );
 }
 
-function getSellerContext(request: FastifyRequest): { sellerId: string; auditable: boolean } | undefined {
-  const principal = (request as any).sellerApiKeyPrincipal as SellerApiKeyPrincipal | undefined;
+function getSellerContext(
+  request: FastifyRequest
+): { sellerId: string; auditable: boolean } | undefined {
+  const principal = request.sellerApiKeyPrincipal as SellerApiKeyPrincipal | undefined;
   if (principal === undefined) {
     return undefined;
   }

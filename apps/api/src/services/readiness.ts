@@ -6,7 +6,11 @@ import {
   listConfiguredNetworks,
   localIssuerPublicKey
 } from "@lumenbazaar/shared";
-import { type FacilitatorSignerProvider } from "@lumenbazaar/stellar-payments";
+import {
+  type FacilitatorSignerProvider,
+  type SecretProviderCheckResult,
+  type SecretProviderStartupReport
+} from "@lumenbazaar/stellar-payments";
 
 export type PaymentCapabilities = {
   exact: boolean;
@@ -50,6 +54,16 @@ export type ReadinessReport = {
     stellarRpc: ReadinessCheck;
     horizon: ReadinessCheck;
     signer: ReadinessCheck;
+    /**
+     * Startup secret-provider health checks (issue #113). Reports whether
+     * every configured secret provider (facilitator signer, event-stream
+     * signing secret) passed its startup check. `not_required` when no secret
+     * providers are configured; `unavailable` with the stable failure reason
+     * code of the first failing check when any configured provider failed.
+     * A failed secret provider makes the report not ready, because the
+     * capability that requires the secret is blocked (fail closed).
+     */
+    secretProviders: ReadinessCheck;
     migrations: ReadinessCheck;
     assets: ReadinessCheck;
   };
@@ -71,7 +85,7 @@ export type ReadinessProbes = {
 };
 
 /** Default probe deadline. Override with READINESS_PROBE_TIMEOUT_MS env var or per-call. */
-const defaultProbeTimeoutMs = Number(process.env.READINESS_PROBE_TIMEOUT_MS ?? 2_000);
+export const defaultProbeTimeoutMs = Number(process.env.READINESS_PROBE_TIMEOUT_MS ?? 2_000);
 
 const requiredMigrations = [
   "0001_core_catalog",
@@ -87,11 +101,24 @@ export function createReadinessService(
   config: AppConfig,
   requestedCapabilities: PaymentCapabilities,
   probes: ReadinessProbes = createRuntimeReadinessProbes(config),
-  probeTimeoutMs: number = defaultProbeTimeoutMs
+  probeTimeoutMs: number = defaultProbeTimeoutMs,
+  /**
+   * Startup secret-provider health check report (issue #113), produced in
+   * `main.ts` before the app is built. When supplied, a failed facilitator
+   * signer startup check is surfaced on the `signer` check (instead of a
+   * misleading `not_configured`) and every configured provider is summarised
+   * on the `secretProviders` check.
+   */
+  secretProviderReport?: SecretProviderStartupReport
 ): ReadinessService {
   return {
     async evaluate() {
       const signerRequired = requestedCapabilities.exact || requestedCapabilities.upto;
+      const signerStartupFailure = secretProviderReport?.results.find(
+        (result): result is Extract<SecretProviderCheckResult, { ok: false }> =>
+          result.capability === "facilitator_signer" && !result.ok
+      );
+      const secretProviders = secretProviderCheckFromReport(secretProviderReport);
       const [database, redis, stellarRpc, horizon, signer, migrations, assets] = await Promise.all([
         runProbe(probes.database, probeTimeoutMs),
         runProbe(probes.redis, probeTimeoutMs),
@@ -99,7 +126,11 @@ export function createReadinessService(
         runProbe(probes.horizon, probeTimeoutMs),
         signerRequired
           ? probes.signer === undefined
-            ? Promise.resolve(notConfigured())
+            ? Promise.resolve<ReadinessCheck>(
+                signerStartupFailure === undefined
+                  ? notConfigured()
+                  : { status: "unavailable", reason: signerStartupFailure.reason }
+              )
             : runProbe(probes.signer, probeTimeoutMs)
           : Promise.resolve<ReadinessCheck>({ status: "not_required" }),
         runProbe(probes.migrations, probeTimeoutMs),
@@ -108,6 +139,8 @@ export function createReadinessService(
       const requiredChecks = [database, redis, stellarRpc, horizon, migrations, assets];
       const sharedDependenciesReady = requiredChecks.every((check) => check.status === "ready");
       const signerReady = !signerRequired || signer.status === "ready";
+      const secretProvidersReady =
+        secretProviders.status === "ready" || secretProviders.status === "not_required";
       const exact = requestedCapabilities.exact && sharedDependenciesReady && signerReady;
       const upto =
         requestedCapabilities.upto &&
@@ -121,7 +154,7 @@ export function createReadinessService(
         );
 
       return {
-        ok: sharedDependenciesReady && signerReady,
+        ok: sharedDependenciesReady && signerReady && secretProvidersReady,
         environment: config.lumenEnv,
         checks: {
           database,
@@ -129,6 +162,7 @@ export function createReadinessService(
           stellarRpc,
           horizon,
           signer,
+          secretProviders,
           migrations,
           assets
         },
@@ -150,6 +184,7 @@ export function createStaticReadinessService(
     stellarRpc: ready,
     horizon: ready,
     signer: capabilities.exact || capabilities.upto ? ready : { status: "not_required" },
+    secretProviders: ready,
     migrations: ready,
     assets: ready,
     ...overrides
@@ -334,7 +369,39 @@ function notConfigured(): ReadinessCheck {
   return { status: "not_configured", reason: "probe_not_registered" };
 }
 
-async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs: number = defaultProbeTimeoutMs) {
+/**
+ * Summarise a startup secret-provider report (issue #113) as a readiness
+ * check. No report (or an empty one) means no secret providers are
+ * configured, so the check is `not_required`. A report with any failure is
+ * `unavailable` with the first failing check's stable reason code; raw
+ * provider errors are never carried over.
+ */
+function secretProviderCheckFromReport(
+  report: SecretProviderStartupReport | undefined
+): ReadinessCheck {
+  if (report === undefined || report.results.length === 0) {
+    return { status: "not_required" };
+  }
+
+  const latencyMs = Math.max(...report.results.map((result) => result.latencyMs));
+
+  if (report.allOk) {
+    return { status: "ready", latencyMs };
+  }
+
+  const firstFailure = report.results.find((result) => !result.ok);
+  return {
+    status: "unavailable",
+    latencyMs,
+    ...(firstFailure === undefined ? {} : { reason: firstFailure.reason })
+  };
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+  timeoutMs: number = defaultProbeTimeoutMs
+) {
   const signal = AbortSignal.timeout(timeoutMs);
   return fetch(url, { ...init, signal });
 }

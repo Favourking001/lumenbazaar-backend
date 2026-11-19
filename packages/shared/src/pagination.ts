@@ -1,6 +1,14 @@
 export const defaultPageLimit = 25;
 export const maxPageLimit = 100;
 
+/**
+ * Maximum number of results a client may page through with cursors on a
+ * single listing. Cursors carry the depth (number of results already
+ * returned); requesting a page at or beyond this depth is rejected with
+ * RESULT_WINDOW_EXCEEDED instead of running another expensive scan.
+ */
+export const maxResultWindow = 1000;
+
 export type PaginationQuery = {
   cursor?: string;
   limit?: number;
@@ -14,6 +22,11 @@ export type CursorPage<T> = {
 export type DecodedCursor = {
   id: string;
   createdAt?: string;
+  /**
+   * Number of results already returned before this cursor. Absent on
+   * cursors issued before result-window enforcement; treated as 0.
+   */
+  depth?: number;
 };
 
 export function normalizeLimit(limit: number | undefined) {

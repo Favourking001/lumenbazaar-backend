@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "@lumenbazaar/shared";
+import { stubQuoteSettlementFee } from "@lumenbazaar/testkit";
 import {
   InMemoryPaymentAttemptStore,
   PaymentVerificationService,
@@ -21,6 +22,7 @@ describe("conformance routes", () => {
           adapter: "@x402/stellar"
         };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       async settleExact() {
         return {
           transactionHash: "tx_conformance",

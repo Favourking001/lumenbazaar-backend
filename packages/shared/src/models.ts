@@ -80,6 +80,7 @@ export type ResourceSchema = {
 };
 
 export type Resource = {
+  displayUrl?: string | null | undefined;
   id: string;
   sellerId: string;
   type: ResourceType;
@@ -96,6 +97,8 @@ export type Resource = {
   outputSchema: JsonObject;
   extensions: JsonObject;
   status: ResourceStatus;
+  /** Optimistic-concurrency version. Starts at 1 and increments on every update. */
+  version: number;
   createdAt: string;
   updatedAt: string;
 };
