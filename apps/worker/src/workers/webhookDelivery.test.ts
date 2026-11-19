@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   deliverWebhook,
   type WebhookDeliveryJobInput,
@@ -38,7 +38,11 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
   beforeEach(() => {
     // Mock global fetch
-    vi.global.fetch = vi.fn();
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   describe("DNS Rebinding Detection", () => {
@@ -68,7 +72,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
         headers: { "content-type": "application/json" }
       });
 
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput({
         url: "https://legitimate.example.com/webhook",
@@ -86,7 +90,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
         status: 200
       });
 
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput({
         url: "https://example.com/webhook",
@@ -103,7 +107,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
         status: 200
       });
 
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput({
         url: "https://example.com/webhook",
@@ -123,7 +127,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
         headers: { "content-type": "application/json" }
       });
 
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -137,7 +141,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
     it("includes HMAC signature in request", async () => {
       const mockResponse = new Response("OK", { status: 200 });
       const fetchMock = vi.fn().mockResolvedValue(mockResponse);
-      vi.global.fetch = fetchMock;
+      vi.stubGlobal("fetch", fetchMock);
 
       const input = createJobInput();
       await deliverWebhook(input);
@@ -156,7 +160,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
     it("includes previous signatures for secret rotation", async () => {
       const mockResponse = new Response("OK", { status: 200 });
       const fetchMock = vi.fn().mockResolvedValue(mockResponse);
-      vi.global.fetch = fetchMock;
+      vi.stubGlobal("fetch", fetchMock);
 
       const input = createJobInput({
         previousSecrets: ["old-secret-1", "old-secret-2"]
@@ -181,7 +185,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
   describe("Retry Logic", () => {
     it("retries on 5xx errors up to max attempts", async () => {
       const mockResponse = new Response("Server Error", { status: 500 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput({ attemptNumber: 0 });
       const result = await deliverWebhook(input);
@@ -194,7 +198,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("does not retry on 4xx errors (except 408, 429, 503)", async () => {
       const mockResponse = new Response("Not Found", { status: 404 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -206,7 +210,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("retries on 408 Request Timeout", async () => {
       const mockResponse = new Response("Request Timeout", { status: 408 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -216,7 +220,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("retries on 429 Rate Limited", async () => {
       const mockResponse = new Response("Too Many Requests", { status: 429 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -226,7 +230,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("retries on 503 Service Unavailable", async () => {
       const mockResponse = new Response("Service Unavailable", { status: 503 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -236,7 +240,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("stops retrying after max attempts", async () => {
       const mockResponse = new Response("Server Error", { status: 500 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput({
         attemptNumber: 4 // Already at attempt 5 (0-indexed)
@@ -249,7 +253,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("handles connection errors as retriable", async () => {
       const error = new Error("ECONNREFUSED: Connection refused");
-      vi.global.fetch = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -261,7 +265,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("does not retry on invalid URL error", async () => {
       const error = new Error("Invalid URL");
-      vi.global.fetch = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -272,7 +276,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("does not retry on unsupported protocol error", async () => {
       const error = new Error("Unsupported protocol");
-      vi.global.fetch = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -284,7 +288,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
   describe("Timeout Handling", () => {
     it("handles timeout errors as retriable", async () => {
       const error = new Error("The operation was aborted");
-      vi.global.fetch = vi.fn().mockRejectedValue(error);
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -296,15 +300,12 @@ describe("Webhook Delivery with SSRF Protection", () => {
     it("uses configured timeout", async () => {
       const mockResponse = new Response("OK", { status: 200 });
       const fetchMock = vi.fn().mockResolvedValue(mockResponse);
-      vi.global.fetch = fetchMock;
+      vi.stubGlobal("fetch", fetchMock);
 
       const input = createJobInput();
       await deliverWebhook(input);
 
-      const [, options] = fetchMock.mock.calls[0] as [
-        string,
-        RequestInit
-      ];
+      const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(options.signal).toBeDefined();
       expect(options.redirect).toBe("error"); // Redirects disabled
     });
@@ -314,7 +315,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
     it("truncates large response bodies", async () => {
       const largeBody = "x".repeat(1000);
       const mockResponse = new Response(largeBody, { status: 200 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -325,7 +326,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
     it("includes full response body when small", async () => {
       const body = "Small response";
       const mockResponse = new Response(body, { status: 200 });
-      vi.global.fetch = vi.fn().mockResolvedValue(mockResponse);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
 
       const input = createJobInput();
       const result = await deliverWebhook(input);
@@ -369,7 +370,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
   describe("Header Redaction", () => {
     it("redacts Authorization header", () => {
       const headers = {
-        "authorization": "Bearer token123",
+        authorization: "Bearer token123",
         "content-type": "application/json",
         "x-api-key": "secret-key"
       };
@@ -383,7 +384,7 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("redacts Cookie header", () => {
       const headers = {
-        "cookie": "session=abc123",
+        cookie: "session=abc123",
         "set-cookie": "token=xyz789"
       };
 
@@ -395,8 +396,8 @@ describe("Webhook Delivery with SSRF Protection", () => {
 
     it("is case-insensitive", () => {
       const headers = {
-        "AUTHORIZATION": "Bearer token",
-        "Authorization": "Bearer token",
+        AUTHORIZATION: "Bearer token",
+        Authorization: "Bearer token",
         "Content-Type": "application/json"
       };
 

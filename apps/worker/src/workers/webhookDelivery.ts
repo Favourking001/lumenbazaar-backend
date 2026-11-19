@@ -11,6 +11,8 @@ import {
   WEBHOOK_DELIVERY_REQUEST_TIMEOUT_MS,
   WEBHOOK_MAX_DELIVERY_ATTEMPTS,
   WEBHOOK_DELIVERY_INITIAL_BACKOFF_MS,
+  shouldSkipSuspendedSellerWork,
+  type SellerStatusResolver,
   detectDNSRebinding,
   validateRedirectTarget,
   validateHostnameResolution
@@ -76,13 +78,31 @@ export function computeBackoffDelay(
  * 3. Blocks non-HTTPS redirects
  * 4. Maintains fail-closed: blocks delivery on validation errors
  *
+ * When `resolveSellerStatus` is provided and the owning seller is suspended,
+ * the delivery is skipped without contacting the endpoint (`shouldRetry:
+ * false`): queued deliveries are new seller-visible work, not recovery.
+ *
  * @param input - Webhook delivery job input
  * @returns Delivery result with retry instructions
  */
 export async function deliverWebhook(
-  input: WebhookDeliveryJobInput
+  input: WebhookDeliveryJobInput,
+  options: { resolveSellerStatus?: SellerStatusResolver } = {}
 ): Promise<WebhookDeliveryResult> {
   const startTime = Date.now();
+
+  if (options.resolveSellerStatus !== undefined) {
+    const sellerStatus = await options.resolveSellerStatus(input.sellerId);
+    if (shouldSkipSuspendedSellerWork(sellerStatus)) {
+      return {
+        success: false,
+        latencyMs: Date.now() - startTime,
+        errorClass: "SELLER_SUSPENDED",
+        shouldRetry: false
+      };
+    }
+  }
+
   let rawBody: string;
   try {
     rawBody = serializeWebhookPayload(input.payload);
@@ -100,10 +120,14 @@ export async function deliverWebhook(
   // On subsequent attempts, check if hostname still resolves to same IPs.
   // This prevents attackers from registering a domain to a safe IP during validation,
   // then changing it to a private IP for actual delivery.
-  if (input.attemptNumber === 0 && input.initialResolvedIPs && input.initialResolvedIPs.length > 0) {
+  if (
+    input.attemptNumber === 0 &&
+    input.initialResolvedIPs &&
+    input.initialResolvedIPs.length > 0
+  ) {
     const url = new URL(input.url);
     const rebindingDetected = await detectDNSRebinding(url.hostname, input.initialResolvedIPs);
-    
+
     if (rebindingDetected) {
       return {
         success: false,
@@ -161,6 +185,7 @@ export async function deliverWebhook(
         success: true,
         statusCode: response.status,
         latencyMs,
+        responseBodyTruncated,
         shouldRetry: false
       };
     }

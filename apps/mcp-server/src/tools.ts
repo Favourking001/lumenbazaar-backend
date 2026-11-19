@@ -36,8 +36,28 @@ const paymentPayloadSchema = z
   .strict();
 
 /**
- * Tool definitions and input/output schemas for MCP server
+ * Machine-readable truncation metadata attached to a tool result whose
+ * serialized JSON exceeded its per-tool response budget. See
+ * `packages/shared/src/mcpResponsePolicy.ts` and
+ * `docs/api/mcp-response-size-policy.md`.
  */
+export const mcpTruncationSchema = z
+  .object({
+    truncated: z.literal(true),
+    tool: z.string(),
+    budgetBytes: z.number().int().nonnegative(),
+    originalBytes: z.number().int().nonnegative(),
+    truncatedBytes: z.number().int().nonnegative(),
+    omittedItems: z.number().int().nonnegative(),
+    omittedBytes: z.number().int().nonnegative(),
+    droppedFields: z.array(z.string()),
+    artifactId: z.string().optional(),
+    cursor: z.string().optional(),
+    reason: z.literal("response_exceeds_budget")
+  })
+  .strict();
+
+export type McpTruncationMetadata = z.infer<typeof mcpTruncationSchema>;
 
 export const toolDefinitions = [
   {
@@ -58,7 +78,10 @@ export const toolDefinitions = [
           name: z.string().describe("Display name for the network"),
           chain: z.string().describe("Blockchain identifier")
         })
-      )
+      ),
+      truncation: mcpTruncationSchema
+        .optional()
+        .describe("Present when the result exceeded its response budget and was truncated")
     })
   },
   {
@@ -142,7 +165,10 @@ export const toolDefinitions = [
         })
       ),
       cursor: z.string().optional().describe("Pagination cursor for next batch"),
-      total: z.number().optional().describe("Total number of matching resources")
+      total: z.number().optional().describe("Total number of matching resources"),
+      truncation: mcpTruncationSchema
+        .optional()
+        .describe("Present when the result exceeded its response budget and was truncated")
     })
   },
   {
@@ -178,7 +204,10 @@ export const toolDefinitions = [
         .describe("For HTTP endpoints: route pattern with {param} placeholders"),
       inputSchema: z.record(z.string(), z.unknown()).describe("JSON schema for request payload"),
       outputSchema: z.record(z.string(), z.unknown()).describe("JSON schema for response payload"),
-      paymentTerms: paymentRequirementsSchema
+      paymentTerms: paymentRequirementsSchema,
+      truncation: mcpTruncationSchema
+        .optional()
+        .describe("Present when the result exceeded its response budget and was truncated")
     })
   },
   {
@@ -201,7 +230,10 @@ export const toolDefinitions = [
       resourceId: z.string(),
       paymentRequirements: paymentRequirementsSchema,
       requiresWalletSignature: z.literal(true),
-      budget: z.record(z.string(), z.unknown())
+      budget: z.record(z.string(), z.unknown()),
+      truncation: mcpTruncationSchema
+        .optional()
+        .describe("Present when the result exceeded its response budget and was truncated")
     })
   },
   {
@@ -318,6 +350,75 @@ export const toolDefinitions = [
     },
     inputSchema: z.object({}).strict(),
     outputSchema: z.record(z.string(), z.unknown())
+  },
+  {
+    capability: "local" as const,
+    name: "get_response_artifact",
+    description:
+      "Retrieve the omitted remainder of a truncated tool result by artifact id (see the truncation metadata on the truncated result)",
+    jsonInputSchema: {
+      type: "object",
+      properties: {
+        artifactId: {
+          type: "string",
+          description: "Artifact id from a truncation object's artifactId field"
+        },
+        offset: {
+          type: "number",
+          description: "Number of omitted entries already retrieved (0 for the first page)"
+        },
+        limit: {
+          type: "number",
+          minimum: 1,
+          maximum: 100,
+          description: "Omitted entries to return (default 20, maximum 100)"
+        }
+      },
+      required: ["artifactId"],
+      additionalProperties: false
+    },
+    inputSchema: z
+      .object({
+        artifactId: z.string().min(1).max(200).describe("Artifact id from truncation metadata"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .default(0)
+          .describe("Number of omitted entries already retrieved"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .default(20)
+          .describe("Omitted entries to return")
+      })
+      .strict(),
+    outputSchema: z.object({
+      artifactId: z.string(),
+      tool: z.string().describe("Tool whose result was truncated"),
+      storedAt: z.number().int().describe("Epoch milliseconds when the artifact was stored"),
+      truncated: z.literal(true),
+      totalOmitted: z.number().int().describe("Total omitted entries held by this artifact"),
+      hasMore: z.boolean().describe("Whether more omitted entries remain after this page"),
+      items: z.array(
+        z.object({
+          path: z.string().describe("Dot path of the omitted value in the original result"),
+          kind: z.enum(["array-item", "field", "string-tail"]),
+          value: z.unknown()
+        })
+      ),
+      nextCursor: z
+        .string()
+        .optional()
+        .describe("Opaque cursor for the next page of omitted entries, when hasMore is true"),
+      truncation: mcpTruncationSchema
+        .optional()
+        .describe("Present when this page itself exceeded its response budget and was truncated")
+    })
   }
 ];
 

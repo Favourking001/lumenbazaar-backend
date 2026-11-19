@@ -1,6 +1,12 @@
 import { type Job } from "bullmq";
 
-import { getPrismaClient, redactSensitiveText } from "@lumenbazaar/shared";
+import {
+  getPrismaClient,
+  redactSensitiveText,
+  shouldSkipSuspendedSellerWork,
+  type SellerStatusResolver
+} from "@lumenbazaar/shared";
+import { type PrismaClient } from "@prisma/client";
 
 export type SearchSyncJobData = {
   action: "rebuild" | "mark_stale";
@@ -12,11 +18,17 @@ export type SearchSyncJobData = {
  * Search Sync Worker
  * Manages search document synchronization and rebuilding of search indexes
  */
-export async function handleSearchSync(job: Job<SearchSyncJobData>) {
+export async function handleSearchSync(
+  job: Job<SearchSyncJobData>,
+  dependencies: {
+    db?: PrismaClient;
+    resolveSellerStatus?: SellerStatusResolver;
+  } = {}
+) {
   const { action, resourceId, network } = job.data;
 
   try {
-    const db = getPrismaClient();
+    const db = dependencies.db ?? getPrismaClient();
 
     if (action === "rebuild") {
       job.log("Starting search index rebuild");
@@ -33,8 +45,20 @@ export async function handleSearchSync(job: Job<SearchSyncJobData>) {
       });
 
       let indexedCount = 0;
+      let skippedSuspendedCount = 0;
       for (const resource of resources) {
         try {
+          // Suspended sellers get no new indexed presence: skip their
+          // resources during a rebuild. Marking documents stale (the
+          // `mark_stale` action below) is cleanup and stays allowed.
+          if (dependencies.resolveSellerStatus !== undefined) {
+            const sellerStatus = await dependencies.resolveSellerStatus(resource.sellerId);
+            if (shouldSkipSuspendedSellerWork(sellerStatus)) {
+              skippedSuspendedCount++;
+              continue;
+            }
+          }
+
           // Build search document
           const body = buildSearchBody(resource);
           const ranking = buildRankingFields(resource);
@@ -65,7 +89,12 @@ export async function handleSearchSync(job: Job<SearchSyncJobData>) {
         }
       }
 
-      job.log(`Search index rebuild complete: ${indexedCount} resources indexed`);
+      job.log(
+        `Search index rebuild complete: ${indexedCount} resources indexed` +
+          (skippedSuspendedCount > 0
+            ? `, ${skippedSuspendedCount} skipped for suspended sellers`
+            : "")
+      );
 
       // Record the sync event
       await db.catalogEvent.create({
@@ -76,6 +105,7 @@ export async function handleSearchSync(job: Job<SearchSyncJobData>) {
           metadata: {
             action: "rebuild",
             indexedCount,
+            skippedSuspendedCount,
             network: network ?? "all"
           }
         }

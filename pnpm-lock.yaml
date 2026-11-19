@@ -233,6 +233,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@lumenbazaar/worker':
+        specifier: workspace:*
+        version: link:../../apps/worker
       uuid:
         specifier: ^14.0.3
         version: 14.0.3

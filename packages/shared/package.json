@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@lumenbazaar/worker": "workspace:*",
     "uuid": "^14.0.3"
   }
 }

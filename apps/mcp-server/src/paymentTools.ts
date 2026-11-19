@@ -1,3 +1,4 @@
+import { assertSellerActiveForOperation, type SellerStatusResolver } from "@lumenbazaar/shared";
 import {
   createBudgetManager,
   createDefaultBudget,
@@ -17,6 +18,12 @@ export type McpPaymentToolServiceOptions = {
   apiUrl?: string;
   budgetManager?: BudgetManager;
   client?: BackendClient;
+  /**
+   * Optional seller-status resolver. When provided, paid tools are blocked
+   * for resources owned by a suspended seller (paid). Receipt reads stay
+   * allowed.
+   */
+  resolveSellerStatus?: SellerStatusResolver;
 };
 
 export type PreparePaymentInput = {
@@ -37,16 +44,19 @@ export class McpPaymentToolService {
   private readonly apiUrl: string;
   private readonly budgetManager: BudgetManager;
   private readonly client: BackendClient;
+  private readonly resolveSellerStatus: SellerStatusResolver | undefined;
 
   constructor(options: McpPaymentToolServiceOptions = {}) {
     this.client = options.client ?? new BackendClient(options.apiUrl);
     this.apiUrl = options.apiUrl ?? this.client.getBaseUrl();
     this.budgetManager =
       options.budgetManager ?? createBudgetManager(createDefaultBudget("stellar:testnet"));
+    this.resolveSellerStatus = options.resolveSellerStatus;
   }
 
   async preparePayment(input: PreparePaymentInput) {
     const resource = await this.client.getResource(input.resourceId);
+    await this.assertSellerActive(resource);
     const paymentRequirements = paymentTermsFromResource(resource);
 
     this.assertWithinBudget(paymentRequirements);
@@ -61,6 +71,7 @@ export class McpPaymentToolService {
 
   async callPaidResource(input: CallPaidResourceInput) {
     const resource = await this.client.getResource(input.resourceId);
+    await this.assertSellerActive(resource);
     const paymentRequirements = paymentTermsFromResource(resource);
     const registeredUrl = requireString(resource.url, "url");
 
@@ -102,6 +113,17 @@ export class McpPaymentToolService {
       constraint: this.budgetManager.getConstraint(),
       state: this.budgetManager.getState()
     };
+  }
+
+  private async assertSellerActive(resource: Record<string, unknown>): Promise<void> {
+    if (this.resolveSellerStatus === undefined) {
+      return;
+    }
+    const sellerId = resource.sellerId;
+    if (typeof sellerId !== "string" || sellerId.length === 0) {
+      return;
+    }
+    await assertSellerActiveForOperation(this.resolveSellerStatus, sellerId, "paid");
   }
 
   private assertWithinBudget(paymentRequirements: ExactResourcePaymentRequirements) {

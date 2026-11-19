@@ -217,6 +217,8 @@ const limitQueryParameter: RouteParameter = {
   description:
     "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
   schema: { type: "integer", minimum: 1, maximum: 100, default: 25 }
+};
+
 const etagHeader: Record<string, unknown> = {
   description:
     "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
@@ -270,13 +272,21 @@ const assetSchema: SchemaObject = {
 
 const seller: SchemaObject = {
   type: "object",
-  required: ["id", "displayName", "walletAddress", "domain", "domainVerifiedAt"],
+  required: ["id", "displayName", "walletAddress", "domain", "domainVerifiedAt", "status"],
   properties: {
     id: { type: "string" },
     displayName: { type: "string" },
     walletAddress: { type: "string" },
     domain: { type: "string" },
     domainVerifiedAt: { type: ["string", "null"], format: "date-time" },
+    status: {
+      type: "string",
+      enum: ["active", "suspended"],
+      description:
+        "Seller lifecycle status. A suspended seller cannot perform write or paid-resource operations; reads and recovery operations remain available."
+    },
+    suspendedAt: { type: ["string", "null"], format: "date-time" },
+    suspensionReason: { type: ["string", "null"] },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" }
   }

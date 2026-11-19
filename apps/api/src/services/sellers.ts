@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
-import { LumenError, type Seller, type SellerDomain } from "@lumenbazaar/shared";
+import {
+  LumenError,
+  assertSellerNotSuspendedForOperation,
+  type Seller,
+  type SellerDomain,
+  type SellerOperationKind,
+  type SellerStatus,
+  type SellerSuspensionInfo
+} from "@lumenbazaar/shared";
 import { assertStellarPublicKey } from "@lumenbazaar/stellar-payments";
 
 import { type AuditLogService } from "./audit.js";
@@ -28,6 +36,12 @@ export type SellerStore = {
     method: SellerDomain["verificationMethod"]
   ) => Promise<SellerDomain>;
   markDomainVerified: (sellerId: string, domain: string) => Promise<Seller>;
+  /**
+   * Set the seller lifecycle status. Suspending records when and why;
+   * reinstating clears both. Implemented by the store so the status change
+   * is atomic with the seller row.
+   */
+  setSellerStatus: (sellerId: string, status: SellerStatus, reason?: string) => Promise<Seller>;
 };
 
 export class InMemorySellerStore implements SellerStore {
@@ -47,6 +61,9 @@ export class InMemorySellerStore implements SellerStore {
       walletAddress: input.walletAddress,
       domain: input.domain,
       domainVerifiedAt: null,
+      status: "active",
+      suspendedAt: null,
+      suspensionReason: null,
       createdAt: now,
       updatedAt: now
     };
@@ -120,6 +137,26 @@ export class InMemorySellerStore implements SellerStore {
     this.sellers.set(sellerId, updated);
     return updated;
   }
+
+  async setSellerStatus(sellerId: string, status: SellerStatus, reason?: string) {
+    const seller = this.sellers.get(sellerId);
+
+    if (seller === undefined) {
+      throw new LumenError("SELLER_NOT_FOUND", "Seller was not found.");
+    }
+
+    const now = new Date().toISOString();
+    const updated: Seller = {
+      ...seller,
+      status,
+      suspendedAt: status === "suspended" ? now : null,
+      suspensionReason: status === "suspended" ? (reason ?? null) : null,
+      updatedAt: now
+    };
+
+    this.sellers.set(sellerId, updated);
+    return updated;
+  }
 }
 
 export const verifyDomainSchema = z.object({
@@ -155,6 +192,63 @@ export class SellerService {
     if (seller === undefined) {
       throw new LumenError("SELLER_NOT_FOUND", "Seller was not found.");
     }
+
+    return seller;
+  }
+
+  /** Suspension state for a seller, for the centralized enforcement helpers. */
+  async getSellerStatus(sellerId: string): Promise<SellerSuspensionInfo | null> {
+    const seller = await this.store.getSeller(sellerId);
+    if (seller === undefined) {
+      return null;
+    }
+    return {
+      status: seller.status,
+      suspendedAt: seller.suspendedAt,
+      suspensionReason: seller.suspensionReason
+    };
+  }
+
+  /**
+   * Central enforcement point for service-level writes and paid operations:
+   * throws `SELLER_SUSPENDED` when the seller is suspended and the kind is
+   * blocked. Reads and recovery pass through.
+   */
+  async requireActiveSeller(sellerId: string, kind: SellerOperationKind): Promise<void> {
+    const seller = await this.getSeller(sellerId);
+    assertSellerNotSuspendedForOperation(seller, kind, sellerId);
+  }
+
+  /**
+   * Suspend a seller (operator action). Takes effect immediately for every
+   * entry point: API keys, existing sessions, and queued work are all gated
+   * on the stored status, so no per-route change is needed to enforce it.
+   */
+  async suspendSeller(sellerId: string, reason?: string) {
+    const seller = await this.store.setSellerStatus(sellerId, "suspended", reason);
+
+    await this.auditLogService?.record({
+      action: "seller.suspended",
+      actorType: "system",
+      targetId: seller.id,
+      targetType: "seller",
+      metadata: { reason: reason ?? null, suspendedAt: seller.suspendedAt }
+    });
+
+    return seller;
+  }
+
+  /** Reinstate a suspended seller. Clears the suspension timestamp and reason. */
+  async reinstateSeller(sellerId: string) {
+    const seller = await this.store.setSellerStatus(sellerId, "active");
+
+    await this.auditLogService?.record({
+      action: "seller.reinstated",
+      actorType: "system",
+      targetId: seller.id,
+      targetType: "seller",
+      metadata: {}
+    });
 
     return seller;
   }

@@ -59,6 +59,9 @@ export function registerStreamRoutes(app: FastifyInstance, options: StreamRouteO
     const params = parseParams(request, sellerParamsSchema);
     const body = parseBody(request, sellerStreamAccessSchema);
     const seller = await sellerService.getSeller(params.sellerId);
+    // Minting a new stream grant is a write: a suspended seller keeps
+    // existing grants (read) but cannot mint new ones.
+    await sellerService.requireActiveSeller(params.sellerId, "write");
 
     return streamAccess.mintSellerGrant(
       { id: seller.id, walletAddress: seller.walletAddress },

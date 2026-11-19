@@ -144,7 +144,23 @@ export const envSchema = z.object({
    * and the settlement call supplies an override with an operator identity
    * and a reason.
    */
-  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false)
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false),
+  /**
+   * Horizon history traversal budgets (see
+   * docs/payments/horizon-pagination-exhaustion-guard.md). Each bounds one
+   * traversal; exceeding a bound stops it cleanly with a resumable cursor.
+   */
+  HORIZON_TRAVERSAL_MAX_PAGES: z.coerce.number().int().positive().default(100),
+  HORIZON_TRAVERSAL_MAX_RECORDS: z.coerce.number().int().positive().default(1000),
+  HORIZON_TRAVERSAL_MAX_DURATION_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * MCP tool execution concurrency bounds, separate from the HTTP
+   * request-rate limit in apps/mcp-server/src/http.ts. A single MCP
+   * client must not be able to consume all tool execution capacity
+   * with parallel calls.
+   */
+  MCP_TOOL_CONCURRENCY_PER_CLIENT: z.coerce.number().int().positive().default(5),
+  MCP_TOOL_CONCURRENCY_GLOBAL: z.coerce.number().int().positive().default(50)
 });
 
 export type RawEnv = z.input<typeof envSchema>;
@@ -253,6 +269,21 @@ export const configKeyMetadata: Record<keyof RawEnv, ConfigKeyMetadata> = {
     section: "api",
     description: "Public URL of the MCP Streamable HTTP endpoint.",
     notes: "Must not be a localhost or placeholder value in hosted environments."
+  },
+  MCP_TOOL_CONCURRENCY_PER_CLIENT: {
+    owner: "mcp-server",
+    sensitivity: "non-secret",
+    section: "api",
+    description:
+      "Maximum number of MCP tool calls executing concurrently for one client, keyed on the authenticated client identity where available.",
+    notes: "Separate from the HTTP request-rate limit. Must not exceed MCP_TOOL_CONCURRENCY_GLOBAL."
+  },
+  MCP_TOOL_CONCURRENCY_GLOBAL: {
+    owner: "mcp-server",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Maximum number of MCP tool calls executing concurrently across all clients.",
+    notes: "Separate from the HTTP request-rate limit."
   },
   CORS_ALLOWED_ORIGINS: {
     owner: "api",
@@ -474,6 +505,38 @@ export const configKeyMetadata: Record<keyof RawEnv, ConfigKeyMetadata> = {
     section: "settlement",
     description: "Inclusion fee bid in stroops for settlement transactions.",
     notes: "Must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
+  },
+  STELLAR_FEE_CEILING_STROOPS: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Repo-enforced settlement fee ceiling in stroops, checked before signing.",
+    notes: "Defaults to STELLAR_MAX_TRANSACTION_FEE_STROOPS when unset; must never exceed it."
+  },
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Deployment-level gate for per-settlement fee ceiling overrides.",
+    notes: "Default deny: overrides are honoured only when explicitly true."
+  },
+  HORIZON_TRAVERSAL_MAX_PAGES: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum Horizon history pages fetched in one traversal before it stops."
+  },
+  HORIZON_TRAVERSAL_MAX_RECORDS: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum unique Horizon history records returned in one traversal before it stops."
+  },
+  HORIZON_TRAVERSAL_MAX_DURATION_MS: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum wall-clock duration in milliseconds of one Horizon history traversal."
   }
 };
 
@@ -488,6 +551,10 @@ export type AppConfig = {
   };
   mcp: {
     publicUrl: string;
+    toolConcurrency: {
+      perClient: number;
+      global: number;
+    };
   };
   databaseUrl: string;
   redisUrl: string;
@@ -509,6 +576,11 @@ export type AppConfig = {
     inclusionFeeStroops: number;
     feeCeilingStroops: number;
     feeCeilingOverrideEnabled: boolean;
+    horizonTraversal: {
+      maxPages: number;
+      maxRecords: number;
+      maxDurationMs: number;
+    };
   };
   eventStreams: {
     signingSecret: string | undefined;
@@ -613,7 +685,11 @@ export function loadConfig(
     },
 
     mcp: {
-      publicUrl: env.MCP_PUBLIC_URL
+      publicUrl: env.MCP_PUBLIC_URL,
+      toolConcurrency: {
+        perClient: env.MCP_TOOL_CONCURRENCY_PER_CLIENT,
+        global: env.MCP_TOOL_CONCURRENCY_GLOBAL
+      }
     },
     databaseUrl: env.DATABASE_URL,
     redisUrl: env.REDIS_URL,
@@ -644,7 +720,12 @@ export function loadConfig(
       maxTransactionFeeStroops: env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
       inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS,
       feeCeilingStroops: env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
-      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED
+      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED,
+      horizonTraversal: {
+        maxPages: env.HORIZON_TRAVERSAL_MAX_PAGES,
+        maxRecords: env.HORIZON_TRAVERSAL_MAX_RECORDS,
+        maxDurationMs: env.HORIZON_TRAVERSAL_MAX_DURATION_MS
+      }
     },
     eventStreams: {
       signingSecret: env.EVENT_STREAM_SIGNING_SECRET
@@ -673,6 +754,10 @@ function assertEnvironmentConfiguration(
     throw new Error(
       "STELLAR_INCLUSION_FEE_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
     );
+  }
+
+  if (env.MCP_TOOL_CONCURRENCY_PER_CLIENT > env.MCP_TOOL_CONCURRENCY_GLOBAL) {
+    throw new Error("MCP_TOOL_CONCURRENCY_PER_CLIENT must not exceed MCP_TOOL_CONCURRENCY_GLOBAL.");
   }
 
   const feeCeilingStroops =

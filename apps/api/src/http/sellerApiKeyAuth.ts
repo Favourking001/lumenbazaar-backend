@@ -2,7 +2,10 @@ import { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import {
+  classifySellerHttpOperation,
+  isSellerOperationBlockedForSuspendedSeller,
   LumenError,
+  sellerSuspendedError,
   SELLER_API_KEY_PREFIX,
   type SellerApiKeyPrincipal,
   type SellerApiKeyScope
@@ -52,6 +55,17 @@ export function registerSellerApiKeyAuth(app: FastifyInstance, options: SellerAp
     const route = request.routeOptions.url;
     const method = request.method;
 
+    // Suspension enforcement, centralized here for every key-authenticated
+    // route: a suspended seller's key can still read and can still perform
+    // recovery (revoke a key, delete a webhook endpoint, verify a domain),
+    // but cannot start any write or paid-resource operation.
+    if (principal.sellerSuspended === true) {
+      const kind = classifySellerHttpOperation(method, route);
+      if (isSellerOperationBlockedForSuspendedSeller(kind)) {
+        throw sellerSuspendedError(principal.sellerId, kind);
+      }
+    }
+
     if (route === "/v1/resources" && method === "POST") {
       requireScope(principal, "resources:write");
       await requireBodySellerOwnership(request, principal);
@@ -64,14 +78,14 @@ export function registerSellerApiKeyAuth(app: FastifyInstance, options: SellerAp
       return;
     }
 
-    if (route === "/v1/resources/:id/versions" && (method === "GET")) {
+    if (route === "/v1/resources/:id/versions" && method === "GET") {
       // Version listing requires read scope and resource ownership
       requireScope(principal, "resources:read");
       await requireResourceOwnership(request, principal, options);
       return;
     }
 
-    if (route === "/v1/resources/:id/versions/:version" && (method === "GET")) {
+    if (route === "/v1/resources/:id/versions/:version" && method === "GET") {
       // Version retrieval requires read scope and resource ownership
       requireScope(principal, "resources:read");
       await requireResourceOwnership(request, principal, options);

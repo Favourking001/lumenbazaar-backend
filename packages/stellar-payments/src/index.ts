@@ -8,6 +8,7 @@ export * from "./clients.js";
 export * from "./facilitatorSigner.js";
 export * from "./secretProviderStartupCheck.js";
 export * from "./hash.js";
+export * from "./horizonFinality.js";
 export * from "./paymentAttemptStore.js";
 export * from "./paymentStatePersistence.js";
 export * from "./paymentPayload.js";

@@ -114,7 +114,8 @@ export const errorCatalog: Record<ErrorCode, ErrorCatalogEntry> = {
     retryGuidance: "never_retry",
     reconciliation:
       "The payment payload structure is malformed or missing required fields. Verify the payload against the x402 specification: check x402Version, paymentPayload structure, paymentRequirements format, and base64 encoding of transaction XDR. Re-encode and resubmit.",
-    safeUserMessage: "The payment request format is invalid. Please check your request and try again.",
+    safeUserMessage:
+      "The payment request format is invalid. Please check your request and try again.",
     documentation:
       "The payment payload does not conform to the x402 specification. Payloads must be properly formed JSON with all required fields, valid base64 transaction XDR, and correct x402Version. Refer to the x402 v2 specification for payload structure.",
     isPublic: true
@@ -171,7 +172,8 @@ export const errorCatalog: Record<ErrorCode, ErrorCatalogEntry> = {
     retryGuidance: "never_retry",
     reconciliation:
       "The transaction amount does not match the required payment amount. Verify the required amount in the payment requirements, ensure the transaction sends the exact amount in the smallest atomic units, and resubmit.",
-    safeUserMessage: "The payment amount does not match the required amount. Please try again with the correct amount.",
+    safeUserMessage:
+      "The payment amount does not match the required amount. Please try again with the correct amount.",
     documentation:
       "The transaction amount differs from the requirement. Payments use atomic units; 1 unit is the smallest divisible amount. The transaction must send the exact required amount with no rounding.",
     isPublic: true
@@ -185,7 +187,8 @@ export const errorCatalog: Record<ErrorCode, ErrorCatalogEntry> = {
     retryGuidance: "never_retry",
     reconciliation:
       "The transaction asset (code or contract ID) does not match the required asset. Check the payment requirements for the exact asset specification and resubmit with the correct asset.",
-    safeUserMessage: "The payment asset does not match the required asset. Please try again with the correct asset.",
+    safeUserMessage:
+      "The payment asset does not match the required asset. Please try again with the correct asset.",
     documentation:
       "The asset in the transaction differs from the requirement. Verify the exact asset code and issuer (or contract ID for soroban assets) from the payment requirements and resubmit.",
     isPublic: true
@@ -214,7 +217,8 @@ export const errorCatalog: Record<ErrorCode, ErrorCatalogEntry> = {
     maxRetries: 3,
     reconciliation:
       "Settlement could not complete due to a temporary infrastructure issue (e.g., Horizon unavailable, rate limited, or network lag). Wait a few seconds, then retry. If the issue persists, check the backend status page or contact support.",
-    safeUserMessage: "Payment settlement is temporarily unavailable. Please try again in a few moments.",
+    safeUserMessage:
+      "Payment settlement is temporarily unavailable. Please try again in a few moments.",
     documentation:
       "Settlement submission to Stellar failed due to a temporary backend infrastructure issue. This typically indicates Horizon/RPC transience. Retry with exponential backoff. If retries are exhausted, check system status or support channels.",
     isPublic: true
@@ -247,6 +251,21 @@ export const errorCatalog: Record<ErrorCode, ErrorCatalogEntry> = {
     safeUserMessage: "The requested resource was not found. Please verify the resource ID.",
     documentation:
       "The resource ID does not match any existing resource. The resource may have been deleted or never existed. Use the list resources endpoint to discover available resources.",
+    isPublic: true
+  },
+
+  SELLER_SUSPENDED: {
+    code: "SELLER_SUSPENDED",
+    httpStatus: 403,
+    category: "authentication",
+    retryable: false,
+    retryGuidance: "never_retry",
+    reconciliation:
+      "The seller is suspended. Write and paid-resource operations are unavailable until an operator reinstates the seller. Reads and recovery operations (revoking API keys, deleting webhook endpoints, settling already-open payment sessions, finalizing in-flight settlements) remain available.",
+    safeUserMessage:
+      "The seller is suspended. Write and paid-resource operations are unavailable until the seller is reinstated.",
+    documentation:
+      "The seller's status is suspended. Suspension is enforced centrally across the API, MCP tools, and worker queues: API keys, existing sessions, and queued work for the suspended seller cannot start new write or paid-resource operations, while reads and recovery operations continue to work.",
     isPublic: true
   },
 

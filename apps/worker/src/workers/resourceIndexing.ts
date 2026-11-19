@@ -1,6 +1,12 @@
 import { type Job } from "bullmq";
 
-import { getPrismaClient, redactSensitiveText } from "@lumenbazaar/shared";
+import {
+  getPrismaClient,
+  redactSensitiveText,
+  shouldSkipSuspendedSellerWork,
+  type SellerStatusResolver
+} from "@lumenbazaar/shared";
+import { type PrismaClient } from "@prisma/client";
 
 export type ResourceIndexingJobData = {
   resourceId: string;
@@ -11,11 +17,17 @@ export type ResourceIndexingJobData = {
  * Resource Indexing Worker
  * Processes resources to build search documents and metadata indexes
  */
-export async function handleResourceIndexing(job: Job<ResourceIndexingJobData>) {
+export async function handleResourceIndexing(
+  job: Job<ResourceIndexingJobData>,
+  dependencies: {
+    db?: PrismaClient;
+    resolveSellerStatus?: SellerStatusResolver;
+  } = {}
+) {
   const { resourceId, versionId } = job.data;
 
   try {
-    const db = getPrismaClient();
+    const db = dependencies.db ?? getPrismaClient();
 
     // Get the resource
     const resource = await db.resource.findUnique({
@@ -24,6 +36,17 @@ export async function handleResourceIndexing(job: Job<ResourceIndexingJobData>) 
 
     if (!resource) {
       throw new Error(`Resource not found: ${resourceId}`);
+    }
+
+    // Suspended sellers get no new indexed presence: skip the job (complete,
+    // not failed) so it is not retried. The resource is re-indexed after
+    // reinstatement when it is next written.
+    if (dependencies.resolveSellerStatus !== undefined) {
+      const sellerStatus = await dependencies.resolveSellerStatus(resource.sellerId);
+      if (shouldSkipSuspendedSellerWork(sellerStatus)) {
+        job.log(`Resource indexing skipped: seller ${resource.sellerId} is suspended`);
+        return;
+      }
     }
 
     // Build search document

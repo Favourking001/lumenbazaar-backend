@@ -5,8 +5,7 @@
     "version": "0.1.0",
     "description": "Facilitator, seller catalog, discovery, and conformance APIs for LumenBazaar.",
     "x-release": {
-      "commit": "4f54ef35e4cca052b073fbc730e0ea04a2d5adb9",
-      "commit": "395f7f81994ad833f6e1c0ccdb6f22f7f8f71abd",
+      "commit": "000ec312cbd726db7e5c5ecadaaa9c835cf1db21",
       "version": "0.1.0",
       "protocol": "stellar-x402",
       "x402Version": 2,
@@ -2584,13 +2583,27 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["id", "displayName", "walletAddress", "domain", "domainVerifiedAt"],
+                  "required": [
+                    "id",
+                    "displayName",
+                    "walletAddress",
+                    "domain",
+                    "domainVerifiedAt",
+                    "status"
+                  ],
                   "properties": {
                     "id": { "type": "string" },
                     "displayName": { "type": "string" },
                     "walletAddress": { "type": "string" },
                     "domain": { "type": "string" },
                     "domainVerifiedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["active", "suspended"],
+                      "description": "Seller lifecycle status. A suspended seller cannot perform write or paid-resource operations; reads and recovery operations remain available."
+                    },
+                    "suspendedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "suspensionReason": { "type": ["string", "null"] },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
                   }
@@ -2715,13 +2728,27 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["id", "displayName", "walletAddress", "domain", "domainVerifiedAt"],
+                  "required": [
+                    "id",
+                    "displayName",
+                    "walletAddress",
+                    "domain",
+                    "domainVerifiedAt",
+                    "status"
+                  ],
                   "properties": {
                     "id": { "type": "string" },
                     "displayName": { "type": "string" },
                     "walletAddress": { "type": "string" },
                     "domain": { "type": "string" },
                     "domainVerifiedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["active", "suspended"],
+                      "description": "Seller lifecycle status. A suspended seller cannot perform write or paid-resource operations; reads and recovery operations remain available."
+                    },
+                    "suspendedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "suspensionReason": { "type": ["string", "null"] },
                     "createdAt": { "type": "string", "format": "date-time" },
                     "updatedAt": { "type": "string", "format": "date-time" }
                   }
@@ -4010,6 +4037,7 @@
                           "name": { "type": "string" },
                           "description": { "type": "string" },
                           "url": { "type": "string", "format": "uri" },
+                          "displayUrl": { "type": ["string", "null"] },
                           "routeTemplate": { "type": "string" },
                           "network": {
                             "type": "string",
@@ -4173,6 +4201,7 @@
                   "name": { "type": "string" },
                   "description": { "type": "string" },
                   "url": { "type": "string", "format": "uri" },
+                  "displayUrl": { "type": ["string", "null"] },
                   "routeTemplate": { "type": "string" },
                   "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                   "payTo": { "type": "string" },
@@ -4245,6 +4274,7 @@
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "url": { "type": "string", "format": "uri" },
+                    "displayUrl": { "type": ["string", "null"] },
                     "routeTemplate": { "type": "string" },
                     "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                     "payTo": { "type": "string" },
@@ -4426,6 +4456,7 @@
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "url": { "type": "string", "format": "uri" },
+                    "displayUrl": { "type": ["string", "null"] },
                     "routeTemplate": { "type": "string" },
                     "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                     "payTo": { "type": "string" },
@@ -4574,6 +4605,7 @@
                   "name": { "type": "string" },
                   "description": { "type": "string" },
                   "url": { "type": "string", "format": "uri" },
+                  "displayUrl": { "type": ["string", "null"] },
                   "routeTemplate": { "type": "string" },
                   "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                   "payTo": { "type": "string" },
@@ -4646,6 +4678,7 @@
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "url": { "type": "string", "format": "uri" },
+                    "displayUrl": { "type": ["string", "null"] },
                     "routeTemplate": { "type": "string" },
                     "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                     "payTo": { "type": "string" },
@@ -4859,6 +4892,7 @@
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "url": { "type": "string", "format": "uri" },
+                    "displayUrl": { "type": ["string", "null"] },
                     "routeTemplate": { "type": "string" },
                     "network": { "type": "string", "enum": ["stellar:testnet", "stellar:pubnet"] },
                     "payTo": { "type": "string" },
@@ -5379,6 +5413,7 @@
                         "name": { "type": "string" },
                         "description": { "type": "string" },
                         "url": { "type": "string", "format": "uri" },
+                        "displayUrl": { "type": ["string", "null"] },
                         "routeTemplate": { "type": "string" },
                         "network": {
                           "type": "string",
@@ -5730,6 +5765,8 @@
             "in": "query",
             "description": "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
             "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 }
+          },
+          {
             "name": "If-None-Match",
             "in": "header",
             "required": false,
@@ -5917,6 +5954,8 @@
             "in": "query",
             "description": "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
             "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 }
+          },
+          {
             "name": "If-None-Match",
             "in": "header",
             "required": false,

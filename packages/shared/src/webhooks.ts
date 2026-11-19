@@ -157,7 +157,7 @@ export function buildWebhookPayload(
  * Webhook signature verification result.
  * Distinguishes error types for clock-skew analysis (fail-closed).
  */
-export type WebhookSignatureVerificationResult = 
+export type WebhookSignatureVerificationResult =
   | { valid: true }
   | { valid: false; errorType: "stale" | "future" | "indeterminate"; reason: string };
 
@@ -246,9 +246,6 @@ export function verifyWebhookSignature(
   const nowTime = clock?.now() ?? Date.now();
 
   // Parse and validate timestamp
-  replayWindowSeconds: number = 300
-): boolean {
-  // Verify timestamp is within replay window
   const receivedTime = new Date(timestamp);
   if (isNaN(receivedTime.getTime())) {
     return {

@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import Fastify from "fastify";
 
 import { type SellerApiKeyScope } from "@lumenbazaar/shared";
-import {
-  SellerApiKeyService,
-  InMemorySellerApiKeyStore
-} from "../services/sellerApiKeys.js";
+import { SellerApiKeyService, InMemorySellerApiKeyStore } from "../services/sellerApiKeys.js";
 import { registerErrorHandling } from "./errors.js";
 import { registerSellerApiKeyAuth } from "./sellerApiKeyAuth.js";
 import { registerRateLimitHook } from "./rateLimit.js";
-import { type RateLimitRequest, type RateLimitResult, type RateLimitService } from "../services/rateLimit.js";
+import {
+  type RateLimitRequest,
+  type RateLimitResult,
+  type RateLimitService
+} from "../services/rateLimit.js";
 
 function jsonBodyParser(app: Fastify.FastifyInstance) {
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
@@ -39,6 +40,7 @@ function buildAuthApp(
   }));
   app.patch("/v1/resources/:id", async () => ({ accepted: true }));
   app.get("/v1/sellers/:sellerId", async () => ({ accepted: true }));
+  app.delete("/v1/sellers/:sellerId/api-keys/:keyId", async () => ({ accepted: true }));
   app.get("/unauthenticated", async () => ({ accepted: true }));
   return app;
 }
@@ -197,6 +199,60 @@ describe("seller API key authentication", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(capturedKeys).toEqual([`key:${apiKey.id}`]);
+    await app.close();
+  });
+
+  it("blocks writes for a suspended seller's key with SELLER_SUSPENDED", async () => {
+    const store = new InMemorySellerApiKeyStore();
+    const issuer = new SellerApiKeyService(store);
+    const { key: plaintext } = await issueKey(issuer, "seller_one", ["resources:write"]);
+    const service = new SellerApiKeyService(store, undefined, undefined, async () => ({
+      status: "suspended",
+      suspendedAt: "2026-11-19T08:00:00.000Z",
+      suspensionReason: "operator review"
+    }));
+    const app = buildAuthApp(service);
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/resources",
+      headers: { "x-api-key": plaintext },
+      payload: { sellerId: "seller_one" }
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: { code: "SELLER_SUSPENDED" }
+    });
+    await app.close();
+  });
+
+  it("lets a suspended seller's key read and revoke keys (recovery)", async () => {
+    const store = new InMemorySellerApiKeyStore();
+    const issuer = new SellerApiKeyService(store);
+    const { key: plaintext, apiKey } = await issueKey(issuer, "seller_one", [
+      "seller:read",
+      "seller:write"
+    ]);
+    const service = new SellerApiKeyService(store, undefined, undefined, async () => ({
+      status: "suspended",
+      suspendedAt: "2026-11-19T08:00:00.000Z",
+      suspensionReason: "operator review"
+    }));
+    const app = buildAuthApp(service);
+
+    const read = await app.inject({
+      method: "GET",
+      url: "/v1/sellers/seller_one",
+      headers: { "x-api-key": plaintext }
+    });
+    expect(read.statusCode).toBe(200);
+
+    const revoke = await app.inject({
+      method: "DELETE",
+      url: `/v1/sellers/seller_one/api-keys/${apiKey.id}`,
+      headers: { "x-api-key": plaintext }
+    });
+    expect(revoke.statusCode).toBe(200);
     await app.close();
   });
 });

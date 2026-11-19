@@ -70,4 +70,6 @@ export type SellerApiKeyPrincipal = {
   sellerId: string;
   scopes: SellerApiKeyScope[];
   expiresAt: string | null;
+  /** True when the owning seller is suspended. Reads and recovery stay allowed; writes and paid operations are blocked by the enforcement hook. */
+  sellerSuspended?: boolean;
 };
