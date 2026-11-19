@@ -10,6 +10,7 @@ import {
   runWithTraceparent,
   safeIdentifierHash,
   startTraceSpan,
+  type SellerStatusResolver,
   validateJobEnvelope
 } from "@lumenbazaar/shared";
 import { settlementReconciliationJobId } from "@lumenbazaar/stellar-payments";
@@ -90,7 +91,7 @@ async function validateJobPayload(
   }
 
   // Validation failed - send to quarantine
-  const traceparent = (job.data.traceparent as string | undefined);
+  const traceparent = job.data.traceparent as string | undefined;
   await quarantineInvalidJob(
     deadLetterQueue,
     String(job.id),
@@ -103,7 +104,7 @@ async function validateJobPayload(
 
   await job.log(
     `Job validation failed and sent to quarantine. Reason: ${result.error.reason}. ` +
-    `Message: ${result.error.message}`
+      `Message: ${result.error.message}`
   );
 
   return null;
@@ -198,10 +199,16 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.resourceIndexing,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.resourceIndexing, async () => {
-            const payload = await validateJobPayload(job, queueNames.resourceIndexing, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.resourceIndexing,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
-            await handleResourceIndexing(job as Job<ResourceIndexingJobData>);
+            await handleResourceIndexing(job as Job<ResourceIndexingJobData>, {
+              resolveSellerStatus: resolveSellerStatusFromDb
+            });
             this.recordProcessedJob(job, queueNames.resourceIndexing);
           }),
         {
@@ -215,7 +222,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
       queueNames.settlementConfirmation,
       async (job: Job<Record<string, unknown>>) =>
         traceWorkerJob(job, queueNames.settlementConfirmation, async () => {
-          const payload = await validateJobPayload(job, queueNames.settlementConfirmation, this.deadLetterQueue);
+          const payload = await validateJobPayload(
+            job,
+            queueNames.settlementConfirmation,
+            this.deadLetterQueue
+          );
           if (payload === null) return; // Job was quarantined
 
           await handleSettlementConfirmation(
@@ -241,10 +252,16 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.searchSync,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.searchSync, async () => {
-            const payload = await validateJobPayload(job, queueNames.searchSync, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.searchSync,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
-            await handleSearchSync(job as Job<SearchSyncJobData>);
+            await handleSearchSync(job as Job<SearchSyncJobData>, {
+              resolveSellerStatus: resolveSellerStatusFromDb
+            });
             this.recordProcessedJob(job, queueNames.searchSync);
           }),
         {
@@ -259,7 +276,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.networkHealth,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.networkHealth, async () => {
-            const payload = await validateJobPayload(job, queueNames.networkHealth, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.networkHealth,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
             await handleNetworkHealth(job as Job<NetworkHealthJobData>);
@@ -277,7 +298,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.outboxRelay,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.outboxRelay, async () => {
-            const payload = await validateJobPayload(job, queueNames.outboxRelay, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.outboxRelay,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
             await handleOutboxRelay(job as Job<OutboxRelayJobData>, this.config);
@@ -295,7 +320,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.receiptFinalizer,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.receiptFinalizer, async () => {
-            const payload = await validateJobPayload(job, queueNames.receiptFinalizer, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.receiptFinalizer,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
             await handleReceiptFinalizer(job as Job<ReceiptFinalizerJobData>);
@@ -313,7 +342,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.stalePaymentCleanup,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.stalePaymentCleanup, async () => {
-            const payload = await validateJobPayload(job, queueNames.stalePaymentCleanup, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.stalePaymentCleanup,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
             await handleStalePaymentCleanup(job as Job<StalePaymentCleanupJobData>);
@@ -331,7 +364,11 @@ export class BullMqWorkerBackend implements WorkerBackend {
         queueNames.outboxCleanup,
         async (job: Job<Record<string, unknown>>) =>
           traceWorkerJob(job, queueNames.outboxCleanup, async () => {
-            const payload = await validateJobPayload(job, queueNames.outboxCleanup, this.deadLetterQueue);
+            const payload = await validateJobPayload(
+              job,
+              queueNames.outboxCleanup,
+              this.deadLetterQueue
+            );
             if (payload === null) return; // Job was quarantined
 
             await handleOutboxCleanup(job as Job<OutboxCleanupJobData>, this.config);

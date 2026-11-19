@@ -1,6 +1,6 @@
 /**
  * SSRF (Server-Side Request Forgery) Protection for Webhook Destinations
- * 
+ *
  * This module provides comprehensive validation for webhook URLs to prevent SSRF attacks:
  * - DNS rebinding attacks: validates that resolved IP addresses remain safe across multiple resolutions
  * - Private/metadata range filtering: blocks RFC 1918, loopback, link-local, and metadata addresses
@@ -20,26 +20,26 @@ export type SSRFValidationResult =
 
 /**
  * Check if an IP address (v4 or v6) is in a private, loopback, link-local, or metadata range.
- * 
+ *
  * Private IPv4 ranges (RFC 1918):
  * - 10.0.0.0/8
  * - 172.16.0.0/12
  * - 192.168.0.0/16
- * 
+ *
  * Special IPv4 ranges:
  * - 127.0.0.0/8 (loopback)
  * - 169.254.0.0/16 (link-local)
  * - 169.254.169.254 (AWS metadata endpoint)
  * - 0.0.0.0/8 (current network)
  * - 255.255.255.255/32 (broadcast)
- * 
+ *
  * Private IPv6 ranges:
  * - ::1/128 (loopback)
  * - fe80::/10 (link-local)
  * - fc00::/7 (unique local addresses / ULA)
  * - ff00::/8 (multicast)
  * - ::ffff:0.0.0.0/96 (IPv4-mapped IPv6)
- * 
+ *
  * @param ip - IP address to check (IPv4 or IPv6)
  * @returns true if the IP is in a restricted range
  */
@@ -47,9 +47,44 @@ export function isPrivateOrRestrictedIP(ip: string): boolean {
   // Normalize and validate IP format
   ip = ip.toLowerCase().trim();
 
+  // IPv6 checks
+  if (ip.includes(":")) {
+    // ::1 - Loopback
+    if (ip === "::1" || ip === "[::1]") return true;
+
+    // fe80:: - Link-local (starts with fe80:)
+    if (ip.startsWith("fe80:") || ip.startsWith("[fe80:")) return true;
+
+    // fc00::/7 - ULA (fc00: or fd00:)
+    if (
+      ip.startsWith("fc00:") ||
+      ip.startsWith("fd00:") ||
+      ip.startsWith("[fc00:") ||
+      ip.startsWith("[fd00:")
+    )
+      return true;
+
+    // ff00::/8 - Multicast
+    if (ip.startsWith("ff00:") || ip.startsWith("[ff00:")) return true;
+
+    // ::ffff:0.0.0.0/96 - IPv4-mapped (check embedded IPv4)
+    if (ip.includes("::ffff:") || ip.includes("[::ffff:")) {
+      const match = ip.match(/::ffff:([0-9.]+)/i) || ip.match(/\[::ffff:([0-9.]+)/i);
+      if (match) {
+        return isPrivateOrRestrictedIP(match[1]);
+      }
+    }
+
+    return false;
+  }
+
   // IPv4 checks
   if (ip.includes(".")) {
     const parts = ip.split(".");
+    // A dotted string whose first label is not numeric is a hostname, not an
+    // IPv4 address attempt (e.g. api.example.com). Hostnames are not private
+    // IPs; restricted hostnames are handled by the caller.
+    if (!/^\d+$/.test(parts[0] ?? "")) return false;
     if (parts.length !== 4) return true; // Invalid format, reject
 
     const octets = parts.map((p) => {
@@ -85,32 +120,6 @@ export function isPrivateOrRestrictedIP(ip: string): boolean {
     return false;
   }
 
-  // IPv6 checks
-  if (ip.includes(":")) {
-    // ::1 - Loopback
-    if (ip === "::1" || ip === "[::1]") return true;
-
-    // fe80:: - Link-local (starts with fe80:)
-    if (ip.startsWith("fe80:") || ip.startsWith("[fe80:")) return true;
-
-    // fc00::/7 - ULA (fc00: or fd00:)
-    if (ip.startsWith("fc00:") || ip.startsWith("fd00:") || 
-        ip.startsWith("[fc00:") || ip.startsWith("[fd00:")) return true;
-
-    // ff00::/8 - Multicast
-    if (ip.startsWith("ff00:") || ip.startsWith("[ff00:")) return true;
-
-    // ::ffff:0.0.0.0/96 - IPv4-mapped (check embedded IPv4)
-    if (ip.includes("::ffff:") || ip.includes("[::ffff:")) {
-      const match = ip.match(/::ffff:([0-9.]+)/i) || ip.match(/\[::ffff:([0-9.]+)/i);
-      if (match) {
-        return isPrivateOrRestrictedIP(match[1]);
-      }
-    }
-
-    return false;
-  }
-
   // Unrecognized format, reject for safety
   return true;
 }
@@ -118,7 +127,7 @@ export function isPrivateOrRestrictedIP(ip: string): boolean {
 /**
  * Resolve a hostname to its IP addresses and validate they are not in restricted ranges.
  * Performs DNS resolution and applies SSRF checks to all results.
- * 
+ *
  * @param hostname - Hostname to resolve
  * @returns Validation result with resolved IPs or error reason
  */
@@ -178,7 +187,7 @@ export async function validateHostnameResolution(hostname: string): Promise<SSRF
 /**
  * Detect DNS rebinding attacks by comparing initial and current resolutions.
  * If a hostname resolves to different IPs on re-resolution, the difference is detected.
- * 
+ *
  * @param hostname - Hostname to check for rebinding
  * @param initialIPs - Original resolved IPs from initial validation
  * @returns true if rebinding is detected (different IPs on re-resolution)
@@ -186,7 +195,7 @@ export async function validateHostnameResolution(hostname: string): Promise<SSRF
 export async function detectDNSRebinding(hostname: string, initialIPs: string[]): Promise<boolean> {
   try {
     const result = await validateHostnameResolution(hostname);
-    
+
     if (!result.valid) {
       // If resolution now fails, treat as rebinding attempt
       return true;
@@ -216,7 +225,7 @@ export async function detectDNSRebinding(hostname: string, initialIPs: string[])
 /**
  * Parse and validate a URL for SSRF protection.
  * Performs comprehensive checks including scheme, credentials, hostname validation, and IP ranges.
- * 
+ *
  * @param urlString - URL to validate
  * @returns Validation result with parsed URL or error reason
  */
@@ -288,7 +297,7 @@ export function validateSSRFURL(
 /**
  * Validate a redirect target URL to ensure it doesn't point to private ranges.
  * Used to prevent redirect-based SSRF attacks.
- * 
+ *
  * @param redirectUrl - URL from redirect response
  * @param originalUrl - Original URL that was requested
  * @returns Validation result
@@ -344,7 +353,7 @@ export function validateRedirectTarget(
  * 3. Validates hostname against restricted ranges
  * 4. Performs DNS resolution and validates resolved IPs
  * 5. Detects potential DNS rebinding by comparing resolutions
- * 
+ *
  * @param urlString - URL to validate
  * @param enableDNSResolution - Whether to perform DNS resolution (default: true)
  * @param enableRebindingDetection - Whether to check for DNS rebinding (default: false, only on delivery)
@@ -354,10 +363,7 @@ export async function validateWebhookURLComprehensive(
   urlString: string,
   enableDNSResolution: boolean = true,
   enableRebindingDetection: boolean = false
-): Promise<
-  | { valid: true; url: URL; resolvedIPs: string[] }
-  | { valid: false; reason: string }
-> {
+): Promise<{ valid: true; url: URL; resolvedIPs: string[] } | { valid: false; reason: string }> {
   // First pass: syntax and static checks
   const staticValidation = validateSSRFURL(urlString);
   if (!staticValidation.valid) {

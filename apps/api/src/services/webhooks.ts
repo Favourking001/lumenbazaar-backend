@@ -12,7 +12,7 @@ import {
   WEBHOOK_SECRET_ROTATION_OVERLAP_SECONDS,
   validateWebhookURLComprehensive,
   validateSSRFURL,
-  isPrivateOrRestrictedIP,
+  isPrivateOrRestrictedIP
 } from "@lumenbazaar/shared";
 
 import { type AuditLogService } from "./audit.js";
@@ -24,7 +24,7 @@ import { type AuditLogService } from "./audit.js";
  * - No embedded credentials
  * - Private/loopback/link-local/metadata range filtering
  * - Hostname format validation
- * 
+ *
  * Note: DNS resolution and rebinding detection happen on delivery,
  * not during URL registration, to avoid validation delays and DNS-based DoS.
  *
@@ -33,12 +33,9 @@ import { type AuditLogService } from "./audit.js";
  */
 export function validateWebhookUrl(urlString: string): URL {
   const validation = validateSSRFURL(urlString);
-  
+
   if (!validation.valid) {
-    throw new LumenError(
-      "VALIDATION_FAILED",
-      validation.reason
-    );
+    throw new LumenError("VALIDATION_FAILED", validation.reason);
   }
 
   return validation.url;

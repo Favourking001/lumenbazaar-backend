@@ -11,6 +11,8 @@ import {
   WEBHOOK_DELIVERY_REQUEST_TIMEOUT_MS,
   WEBHOOK_MAX_DELIVERY_ATTEMPTS,
   WEBHOOK_DELIVERY_INITIAL_BACKOFF_MS,
+  shouldSkipSuspendedSellerWork,
+  type SellerStatusResolver,
   detectDNSRebinding,
   validateRedirectTarget,
   validateHostnameResolution
@@ -118,10 +120,14 @@ export async function deliverWebhook(
   // On subsequent attempts, check if hostname still resolves to same IPs.
   // This prevents attackers from registering a domain to a safe IP during validation,
   // then changing it to a private IP for actual delivery.
-  if (input.attemptNumber === 0 && input.initialResolvedIPs && input.initialResolvedIPs.length > 0) {
+  if (
+    input.attemptNumber === 0 &&
+    input.initialResolvedIPs &&
+    input.initialResolvedIPs.length > 0
+  ) {
     const url = new URL(input.url);
     const rebindingDetected = await detectDNSRebinding(url.hostname, input.initialResolvedIPs);
-    
+
     if (rebindingDetected) {
       return {
         success: false,
@@ -179,6 +185,7 @@ export async function deliverWebhook(
         success: true,
         statusCode: response.status,
         latencyMs,
+        responseBodyTruncated,
         shouldRetry: false
       };
     }
