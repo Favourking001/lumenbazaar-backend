@@ -206,7 +206,7 @@ describe("MCP tool concurrency limits over the protocol", () => {
       });
       expect(second.isError).toBe(true);
       expect(JSON.stringify(second.content)).toContain("CONCURRENCY_LIMIT_EXCEEDED");
-      const secondError = JSON.parse((second.content as Array<{ text: string }>)[0].text) as {
+      const secondError = JSON.parse((second.content as Array<{ text: string }>)[0]!.text) as {
         details?: { scope?: string };
       };
       expect(secondError.details?.scope).toBe("global");

@@ -97,11 +97,21 @@ describe("resolveHorizonTraversalBudget", () => {
     [{ maxDurationMs: 1.5 }, "maxDurationMs"],
     [{ pageSize: 201 }, "pageSize"],
     [{ maxPages: 10_001 }, "maxPages"]
-  ])("fails closed for an invalid budget %s", (overrides) => {
-    expect(() => resolveHorizonTraversalBudget(undefined, overrides)).toThrow(
-      /Horizon traversal budget/
-    );
-  });
+  ])(
+    "fails closed for an invalid budget %s",
+    (
+      overrides:
+        | { maxPages: number }
+        | { maxRecords: number }
+        | { maxDurationMs: number }
+        | { pageSize: number },
+      _key: string
+    ) => {
+      expect(() => resolveHorizonTraversalBudget(undefined, overrides)).toThrow(
+        /Horizon traversal budget/
+      );
+    }
+  );
 });
 
 describe("traverseHorizonHistory", () => {
@@ -152,7 +162,7 @@ describe("traverseHorizonHistory", () => {
     const resumed = await traverseHorizonHistory({
       startUrl: "https://horizon.test/page1",
       fetchPage,
-      resumeCursor: result.resumeCursor
+      resumeCursor: result.resumeCursor!
     });
     expect(resumed.completed).toBe(false);
     expect(resumed.exhaustedReason).toBe("cyclic_next_link");
@@ -216,7 +226,7 @@ describe("traverseHorizonHistory", () => {
       startUrl: "https://horizon.test/page1",
       fetchPage,
       budget: { maxPages: 10 },
-      resumeCursor: first.resumeCursor
+      resumeCursor: first.resumeCursor!
     });
     expect(resumed.completed).toBe(true);
     expect(resumed.records.map((r) => r.id)).toEqual(["r3", "r4", "r5"]);
@@ -254,7 +264,7 @@ describe("traverseHorizonHistory", () => {
       startUrl: "https://horizon.test/page1",
       fetchPage,
       budget: { maxRecords: 10 },
-      resumeCursor: result.resumeCursor
+      resumeCursor: result.resumeCursor!
     });
     expect(resumed.completed).toBe(true);
     expect(resumed.records.map((r) => r.id)).toEqual(["d"]);
@@ -268,7 +278,7 @@ describe("traverseHorizonHistory", () => {
       "https://horizon.test/page2": page([record("b")], "https://horizon.test/page3"),
       "https://horizon.test/page3": page([record("c")])
     });
-    const advancingFetch: typeof fetchPage = async (url) => {
+    const advancingFetch = async (url: string) => {
       const result = await fetchPage(url);
       clock += 100;
       return result;
@@ -290,7 +300,7 @@ describe("traverseHorizonHistory", () => {
       startUrl: "https://horizon.test/page1",
       fetchPage,
       budget: { maxDurationMs: 10_000 },
-      resumeCursor: first.resumeCursor,
+      resumeCursor: first.resumeCursor!,
       now: () => clock
     });
     expect(resumed.completed).toBe(true);
@@ -315,7 +325,7 @@ describe("traverseHorizonHistory", () => {
       startUrl: "https://horizon.test/page1",
       fetchPage,
       budget: { maxPages: 10 },
-      resumeCursor: result.resumeCursor
+      resumeCursor: result.resumeCursor!
     });
     expect(resumed.records.map((r) => r.id)).toEqual(["d"]);
     expect(resumed.metrics.duplicateRecordsSkipped).toBe(1);

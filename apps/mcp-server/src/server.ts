@@ -310,10 +310,9 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
       // an accepted paid call runs the unchanged idempotent payment flow
       // and its receipt stays reconcilable via get_payment_receipt.
       const providedIdentity = options.clientIdentityProvider?.(request, requestExtra);
+      const clientId = requestExtra?.authInfo?.clientId ?? providedIdentity;
       const clientKey = resolveMcpClientKey({
-        ...(requestExtra?.authInfo?.clientId !== undefined || providedIdentity !== undefined
-          ? { clientId: requestExtra?.authInfo?.clientId ?? providedIdentity }
-          : {}),
+        ...(clientId !== undefined ? { clientId } : {}),
         ...(requestExtra?.sessionId !== undefined ? { sessionId: requestExtra.sessionId } : {})
       });
       const release = concurrencyLimiter.acquireOrThrow(clientKey);
