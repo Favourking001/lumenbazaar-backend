@@ -4,6 +4,13 @@ import { z, ZodError } from "zod";
 
 import type { PaymentPayload } from "@lumenbazaar/buyer-sdk";
 import { type SellerStatusResolver } from "@lumenbazaar/shared";
+import {
+  applyMcpResponsePolicy,
+  McpResponseArtifactStore,
+  McpResponseEvidenceTooLargeError,
+  resolveMcpResponsePolicy,
+  type McpResponsePolicy
+} from "@lumenbazaar/shared";
 
 import { BackendClient } from "./client.js";
 import {
@@ -12,7 +19,13 @@ import {
   resolveMcpClientKey,
   type McpToolConcurrencyLimits
 } from "./concurrency.js";
-import { CapabilityUnavailableError, handleToolError, ValidationError } from "./errors.js";
+import {
+  CapabilityUnavailableError,
+  handleToolError,
+  NotFoundError,
+  ResponseTooLargeError,
+  ValidationError
+} from "./errors.js";
 import { McpPaymentToolService } from "./paymentTools.js";
 import { type McpMetricsService } from "./metrics.js";
 import { getToolDefinition, listToolDefinitions, type McpToolCapabilities } from "./tools.js";
@@ -48,6 +61,10 @@ export type CreateMcpServerOptions = {
     request: unknown,
     extra: McpRequestExtra | undefined
   ) => string | undefined;
+  /** Per-tool response budgets. Defaults to `resolveMcpResponsePolicy()` (env). */
+  responsePolicy?: McpResponsePolicy;
+  /** Artifact store for truncated remainders. A fresh store is created when omitted. */
+  artifactStore?: McpResponseArtifactStore;
 };
 
 export function createMcpServer(options: CreateMcpServerOptions = {}) {
@@ -63,6 +80,14 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
   const capabilityProvider = options.capabilityProvider ?? (() => client.getToolCapabilities());
   const concurrencyLimiter =
     options.concurrencyLimiter ?? new McpToolConcurrencyLimiter(options.concurrencyLimits ?? {});
+  const responsePolicy = options.responsePolicy ?? resolveMcpResponsePolicy();
+  const artifactStore =
+    options.artifactStore ??
+    new McpResponseArtifactStore({
+      maxBytes: responsePolicy.artifactMaxBytes,
+      ttlMs: responsePolicy.artifactTtlMs,
+      maxEntries: responsePolicy.artifactMaxEntries
+    });
   const server = new Server(
     {
       name: "lumenbazaar",
@@ -241,6 +266,35 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
             break;
           }
 
+          case "get_response_artifact": {
+            const artifactId = toolInput.artifactId as string;
+            const artifact = artifactStore.get(artifactId);
+            if (artifact === undefined) {
+              throw new NotFoundError("Response artifact not found or expired.", { artifactId });
+            }
+            const page = artifactStore.getPage(
+              artifactId,
+              toolInput.offset as number,
+              toolInput.limit as number
+            );
+            if (page === null) {
+              throw new NotFoundError("Response artifact not found or expired.", { artifactId });
+            }
+            result = {
+              artifactId,
+              tool: artifact.tool,
+              storedAt: artifact.storedAt,
+              truncated: true,
+              totalOmitted: page.totalOmitted,
+              hasMore: page.hasMore,
+              items: page.items
+            };
+            if (page.nextCursor !== null) {
+              result.nextCursor = page.nextCursor;
+            }
+            break;
+          }
+
           default:
             throw new ValidationError("Unknown tool name.");
         }
@@ -271,16 +325,44 @@ export function createMcpServer(options: CreateMcpServerOptions = {}) {
       }
 
       const output = toolDefinition.outputSchema.parse(result) as Record<string, unknown>;
+      // Enforce the per-tool response budget. Oversized results are
+      // truncated explicitly with machine-readable truncation metadata
+      // (and an artifact/cursor for the remainder); payment evidence is
+      // never silently removed — when it alone exceeds the budget the
+      // call fails explicitly with RESPONSE_TOO_LARGE instead.
+      let enforcedOutput: Record<string, unknown>;
+      try {
+        enforcedOutput = applyMcpResponsePolicy(output, {
+          tool: toolName,
+          policy: responsePolicy,
+          artifacts: artifactStore
+        }).value;
+      } catch (error) {
+        if (error instanceof McpResponseEvidenceTooLargeError) {
+          throw new ResponseTooLargeError(
+            error.tool,
+            error.budgetBytes,
+            error.evidenceBytes,
+            error.originalBytes
+          );
+        }
+        throw error;
+      }
+      // The truncated value must still satisfy the tool's output schema.
+      const finalOutput = toolDefinition.outputSchema.parse(enforcedOutput) as Record<
+        string,
+        unknown
+      >;
       options.metrics?.recordTool(toolName, "success");
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(output, null, 2)
+            text: JSON.stringify(finalOutput, null, 2)
           }
         ],
-        structuredContent: output
+        structuredContent: finalOutput
       };
     } catch (error) {
       options.metrics?.recordTool(

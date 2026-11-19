@@ -10,6 +10,7 @@ const knownRoutes = ["health", "mcp", "metrics", "ready", "schema", "version"];
 const knownTools = [
   "call_paid_resource",
   "get_payment_receipt",
+  "get_response_artifact",
   "inspect_budget",
   "inspect_resource",
   "list_supported_networks",

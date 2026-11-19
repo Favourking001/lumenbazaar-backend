@@ -11,7 +11,9 @@ import {
   loadConfig,
   runWithTraceparent,
   serviceName,
-  startTraceSpan
+  startTraceSpan,
+  type McpResponseArtifactStore,
+  type McpResponsePolicy
 } from "@lumenbazaar/shared";
 
 import { BackendClient } from "./client.js";
@@ -126,6 +128,10 @@ export type McpHttpServerOptions = {
   metrics?: McpMetricsService;
   /** Allowed CORS origins. Defaults to MCP_ALLOWED_ORIGINS env var. */
   allowedOrigins?: ReadonlySet<string>;
+  /** Per-tool response budgets. Defaults to `resolveMcpResponsePolicy()` (env). */
+  responsePolicy?: McpResponsePolicy;
+  /** Artifact store for truncated remainders. A fresh store is created when omitted. */
+  artifactStore?: McpResponseArtifactStore;
 };
 
 export type McpHttpServerHandle = {
@@ -219,7 +225,9 @@ export async function startMcpHttpServer(
     client,
     capabilityProvider,
     metrics,
-    concurrencyLimits: config.mcp.toolConcurrency
+    concurrencyLimits: config.mcp.toolConcurrency,
+    ...(options.responsePolicy === undefined ? {} : { responsePolicy: options.responsePolicy }),
+    ...(options.artifactStore === undefined ? {} : { artifactStore: options.artifactStore })
   });
 
   await mcpServer.connect(transport as unknown as Transport);

@@ -78,6 +78,17 @@ export class ConcurrencyLimitError extends McpError {
   }
 }
 
+export class ResponseTooLargeError extends McpError {
+  constructor(tool: string, budgetBytes: number, evidenceBytes: number, originalBytes: number) {
+    super(
+      "RESPONSE_TOO_LARGE",
+      `Payment evidence (${evidenceBytes} bytes) exceeds the ${tool} response budget of ${budgetBytes} bytes; refusing to return a result without payment evidence.`,
+      { tool, budgetBytes, evidenceBytes, originalBytes }
+    );
+    this.name = "ResponseTooLargeError";
+  }
+}
+
 /**
  * Map errors to structured MCP responses
  */

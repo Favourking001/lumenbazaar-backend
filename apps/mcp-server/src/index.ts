@@ -13,6 +13,7 @@ export {
   NotFoundError,
   BackendError,
   PermissionError,
+  ResponseTooLargeError,
   handleToolError
 } from "./errors.js";
 export { McpPaymentToolService } from "./paymentTools.js";
@@ -40,4 +41,11 @@ export { ConcurrencyLimitError } from "./errors.js";
 export type { ConcurrencyLimitScope } from "./errors.js";
 export { createMcpServer } from "./server.js";
 export type { CreateMcpServerOptions, McpRequestExtra } from "./server.js";
-export { toolDefinitions, getToolDefinition, listToolDefinitions, type ToolName } from "./tools.js";
+export {
+  mcpTruncationSchema,
+  toolDefinitions,
+  getToolDefinition,
+  listToolDefinitions,
+  type McpTruncationMetadata,
+  type ToolName
+} from "./tools.js";
