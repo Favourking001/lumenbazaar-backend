@@ -129,7 +129,22 @@ export const envSchema = z.object({
   FACILITATOR_KMS_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   EVENT_STREAM_SIGNING_SECRET: optionalNonEmptyStringEnv,
   STELLAR_MAX_TRANSACTION_FEE_STROOPS: z.coerce.number().int().positive().default(50_000),
-  STELLAR_INCLUSION_FEE_STROOPS: z.coerce.number().int().positive().default(100)
+  STELLAR_INCLUSION_FEE_STROOPS: z.coerce.number().int().positive().default(100),
+  /**
+   * Repo-enforced settlement fee ceiling in stroops, checked immediately
+   * before signing (see docs/payments/settlement-fee-ceilings.md).
+   * Defaults to STELLAR_MAX_TRANSACTION_FEE_STROOPS when unset and must
+   * never exceed it: the maximum is the outer bound the settlement adapter
+   * enforces, so a ceiling above it could never take effect.
+   */
+  STELLAR_FEE_CEILING_STROOPS: z.coerce.number().int().positive().optional(),
+  /**
+   * Deployment-level gate for per-settlement fee ceiling overrides.
+   * Default deny: overrides are honoured only when this is explicitly true
+   * and the settlement call supplies an override with an operator identity
+   * and a reason.
+   */
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false)
 });
 
 export type RawEnv = z.input<typeof envSchema>;
@@ -492,6 +507,8 @@ export type AppConfig = {
   settlement: {
     maxTransactionFeeStroops: number;
     inclusionFeeStroops: number;
+    feeCeilingStroops: number;
+    feeCeilingOverrideEnabled: boolean;
   };
   eventStreams: {
     signingSecret: string | undefined;
@@ -625,7 +642,9 @@ export function loadConfig(
     },
     settlement: {
       maxTransactionFeeStroops: env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
-      inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS
+      inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS,
+      feeCeilingStroops: env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
+      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED
     },
     eventStreams: {
       signingSecret: env.EVENT_STREAM_SIGNING_SECRET
@@ -653,6 +672,17 @@ function assertEnvironmentConfiguration(
   if (env.STELLAR_INCLUSION_FEE_STROOPS > env.STELLAR_MAX_TRANSACTION_FEE_STROOPS) {
     throw new Error(
       "STELLAR_INCLUSION_FEE_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
+    );
+  }
+
+  const feeCeilingStroops =
+    env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS;
+  if (env.STELLAR_INCLUSION_FEE_STROOPS > feeCeilingStroops) {
+    throw new Error("STELLAR_FEE_CEILING_STROOPS must not be below STELLAR_INCLUSION_FEE_STROOPS.");
+  }
+  if (feeCeilingStroops > env.STELLAR_MAX_TRANSACTION_FEE_STROOPS) {
+    throw new Error(
+      "STELLAR_FEE_CEILING_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
     );
   }
 

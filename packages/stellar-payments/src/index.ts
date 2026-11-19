@@ -11,6 +11,7 @@ export * from "./hash.js";
 export * from "./paymentAttemptStore.js";
 export * from "./paymentStatePersistence.js";
 export * from "./paymentPayload.js";
+export * from "./settlementFeeCeiling.js";
 export * from "./paymentPersistence.js";
 export * from "./paymentSession.js";
 export * from "./receipt.js";

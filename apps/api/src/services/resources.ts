@@ -13,6 +13,7 @@ import {
   type ResourceVersion,
   decodeCursor,
   encodeCursor,
+  maxResultWindow,
   normalizeLimit,
   validateRouteTemplate
 } from "@lumenbazaar/shared";
@@ -202,6 +203,18 @@ export class InMemoryResourceStore implements ResourceStore {
   async listResources(filters: ListResourceFilters) {
     const limit = normalizeLimit(filters.limit);
     const cursor = decodeCursor(filters.cursor);
+    if (cursor?.depth !== undefined && cursor.depth >= maxResultWindow) {
+      throw new LumenError(
+        "RESULT_WINDOW_EXCEEDED",
+        `Result window of ${maxResultWindow} results exceeded. Narrow the filters instead of paging further.`,
+        {
+          details: {
+            depth: cursor.depth,
+            maxResultWindow
+          }
+        }
+      );
+    }
     const filtered = [...this.resources.values()]
       .filter((resource) => resourceMatchesFilters(resource, filters))
       .sort(
@@ -218,7 +231,11 @@ export class InMemoryResourceStore implements ResourceStore {
       nextCursor:
         last === undefined || startIndex + limit >= filtered.length
           ? null
-          : encodeCursor({ id: last.id, createdAt: last.createdAt })
+          : encodeCursor({
+              id: last.id,
+              createdAt: last.createdAt,
+              depth: Math.max(startIndex, 0) + page.length
+            })
     };
   }
 
@@ -361,6 +378,7 @@ export class ResourceService {
   async updateResource(
     resourceId: string,
     input: unknown,
+    sellerContext?: { sellerId: string; auditable: boolean }
     sellerContext?: { sellerId: string; auditable: boolean },
     options?: { expectedVersion?: number | undefined }
   ) {
@@ -401,6 +419,9 @@ export class ResourceService {
 
   async deleteResource(
     resourceId: string,
+    sellerContext?: { sellerId: string; auditable: boolean }
+  ) {
+    return this.updateResource(resourceId, { status: "inactive" }, sellerContext);
     sellerContext?: { sellerId: string; auditable: boolean },
     options?: { expectedVersion?: number | undefined }
   ) {
@@ -429,6 +450,7 @@ export class ResourceService {
   async rollbackResource(
     resourceId: string,
     targetVersion: number,
+    sellerContext?: { sellerId: string; auditable: boolean }
     sellerContext?: { sellerId: string; auditable: boolean },
     options?: { expectedVersion?: number | undefined }
   ) {

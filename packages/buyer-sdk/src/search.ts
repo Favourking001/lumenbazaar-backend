@@ -32,6 +32,8 @@ export type SearchResponse = {
   nextCursor: string | null;
 };
 
+import { assertSearchQueryWithinLimits } from "@lumenbazaar/shared";
+
 /**
  * Search for paid resources in the Bazaar
  * @param apiUrl - The Bazaar API base URL
@@ -41,6 +43,10 @@ export async function searchResources(
   apiUrl: string,
   filters: SearchFilters
 ): Promise<SearchResponse> {
+  // Enforce the same query cost and result caps as the API before sending
+  // the request, so an over-budget query fails fast without a round trip.
+  assertSearchQueryWithinLimits(filters);
+
   const params = new URLSearchParams();
 
   if (filters.q) params.append("q", filters.q);
@@ -56,7 +62,16 @@ export async function searchResources(
   });
 
   if (!response.ok) {
-    throw new Error(`Search failed: ${response.statusText}`);
+    // Surface the API's actionable error (code, message, details) when the
+    // server rejected the query, e.g. QUERY_TOO_COMPLEX or PAGE_SIZE_EXCEEDED.
+    const body = (await response.json().catch(() => undefined)) as
+      | { error?: { code?: string; message?: string } }
+      | undefined;
+    const code = body?.error?.code;
+    const message = body?.error?.message;
+    throw new Error(
+      `Search failed: ${code === undefined ? response.statusText : `${code}: ${message ?? response.statusText}`}`
+    );
   }
 
   return response.json() as Promise<SearchResponse>;

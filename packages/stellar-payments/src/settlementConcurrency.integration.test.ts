@@ -2,7 +2,11 @@ import { PrismaClient } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { loadConfig } from "@lumenbazaar/shared";
-import { createTestPaymentRequest, testPaymentConfigEnv } from "@lumenbazaar/testkit";
+import {
+  createTestPaymentRequest,
+  stubQuoteSettlementFee,
+  testPaymentConfigEnv
+} from "@lumenbazaar/testkit";
 
 import { PaymentVerificationService } from "./verification.js";
 import {
@@ -78,6 +82,7 @@ describePostgres("multi-process settlement concurrency", () => {
       async verifyExact() {
         return { valid: true, adapter: "@x402/stellar" };
       },
+      quoteSettlementFee: stubQuoteSettlementFee,
       settleExact
     };
     const config = loadConfig(testPaymentConfigEnv);

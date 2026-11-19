@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "load:test": "tsx scripts/loadtest.ts",
+    "chaos": "tsx scripts/chaos.ts",
     "openapi:check": "tsx scripts/openapi.ts --check",
     "openapi:generate": "tsx scripts/openapi.ts",
     "prisma:generate": "node scripts/prisma.mjs generate",

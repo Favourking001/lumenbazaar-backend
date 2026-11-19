@@ -124,7 +124,8 @@ function mapApiErrorCode(apiCode: string): ErrorCode {
     SETTLEMENT_FAILED: "SETTLEMENT_FAILED",
     REPLAY_DETECTED: "REPLAY_DETECTED",
     UNSUPPORTED_NETWORK: "INVALID_PAYMENT",
-    UNSUPPORTED_ASSET: "INVALID_PAYMENT"
+    UNSUPPORTED_ASSET: "INVALID_PAYMENT",
+    UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT: "INVALID_PAYMENT"
   };
 
   return codeMap[apiCode] || "UNKNOWN_ERROR";
@@ -139,7 +140,8 @@ function isApiErrorRetryable(apiCode: string): boolean {
     "REPLAY_DETECTED",
     "RESOURCE_NOT_FOUND",
     "UNSUPPORTED_NETWORK",
-    "UNSUPPORTED_ASSET"
+    "UNSUPPORTED_ASSET",
+    "UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT"
   ];
 
   return !nonRetryable.includes(apiCode);

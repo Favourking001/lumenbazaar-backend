@@ -3,12 +3,21 @@ import { getReleaseCommit, serviceName } from "@lumenbazaar/shared";
 type HttpMethod = "get" | "post" | "patch" | "delete";
 type SchemaObject = Record<string, unknown>;
 
+type RouteParameter = {
+  name: string;
+  in: "query";
+  required?: boolean;
+  description: string;
+  schema: SchemaObject;
+};
+
 type RouteContract = {
   method: HttpMethod;
   path: string;
   operationId: string;
   summary: string;
   tags: string[];
+  parameters?: RouteParameter[];
   requestBody?: SchemaObject;
   requestBodyRequired?: boolean;
   response: SchemaObject;
@@ -166,6 +175,48 @@ const rateLimitHeaders: Record<string, unknown> = {
   }
 };
 
+const networkQueryParameter: RouteParameter = {
+  name: "network",
+  in: "query",
+  description: "Stellar network the resource settles on.",
+  schema: { type: "string", enum: ["stellar:testnet", "stellar:pubnet"] }
+};
+
+const assetQueryParameter: RouteParameter = {
+  name: "asset",
+  in: "query",
+  description: "Asset code the resource accepts (for example, USDC).",
+  schema: { type: "string" }
+};
+
+const resourceTypeQueryParameter: RouteParameter = {
+  name: "type",
+  in: "query",
+  description: "Resource type.",
+  schema: { type: "string", enum: ["http", "mcp"] }
+};
+
+const sellerIdQueryParameter: RouteParameter = {
+  name: "sellerId",
+  in: "query",
+  description: "Only return resources owned by this seller.",
+  schema: { type: "string" }
+};
+
+const cursorQueryParameter: RouteParameter = {
+  name: "cursor",
+  in: "query",
+  description:
+    "Opaque pagination cursor from a previous response. Paging stops at the maximum result window of 1000 results; a cursor at or beyond that depth is rejected with RESULT_WINDOW_EXCEEDED.",
+  schema: { type: "string" }
+};
+
+const limitQueryParameter: RouteParameter = {
+  name: "limit",
+  in: "query",
+  description:
+    "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
+  schema: { type: "integer", minimum: 1, maximum: 100, default: 25 }
 const etagHeader: Record<string, unknown> = {
   description:
     "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
@@ -395,7 +446,12 @@ const paymentPayload: SchemaObject = {
         transaction: {
           type: "string",
           contentEncoding: "base64",
-          description: "Wallet-signed Stellar transaction envelope XDR."
+          description:
+            "Wallet-signed Stellar transaction envelope XDR. The transaction memo and payment " +
+            "destinations must satisfy the memo and muxed-account policy: memo types none, text " +
+            "(at most 28 bytes), id (uint64), hash and return (32 bytes) are accepted with a " +
+            "G-address destination; muxed-account (M...) and contract (C...) destinations are " +
+            "rejected with every memo type (error UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT)."
         }
       }
     },
@@ -760,7 +816,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/verify",
     operationId: "verifyPayment",
-    summary: "Verify an exact Stellar x402 payment payload.",
+    summary:
+      "Verify an exact Stellar x402 payment payload. The transaction memo and payment destinations are checked against the memo and muxed-account policy before verification.",
     tags: ["facilitator"],
     requestBody: verificationRequest,
     response: verificationResponse
@@ -769,7 +826,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/settle",
     operationId: "settlePayment",
-    summary: "Settle a previously verified exact Stellar x402 payment.",
+    summary:
+      "Settle a previously verified exact Stellar x402 payment. The transaction memo and payment destinations are checked against the memo and muxed-account policy before settlement.",
     tags: ["facilitator"],
     requestBody: {
       type: "object",
@@ -1069,6 +1127,32 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "browseDiscoveryResources",
     summary: "Browse discoverable paid resources.",
     tags: ["discovery"],
+    parameters: [
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      {
+        name: "minPrice",
+        in: "query",
+        description: "Only return resources priced at or above this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "maxPrice",
+        in: "query",
+        description: "Only return resources priced at or below this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "extension",
+        in: "query",
+        description: "Only return resources carrying this extension key.",
+        schema: { type: "string" }
+      },
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
     conditionalGet: true,
     response: jsonObject
   },
@@ -1076,8 +1160,24 @@ export const apiRouteContracts: RouteContract[] = [
     method: "get",
     path: "/v1/discovery/search",
     operationId: "searchDiscoveryResources",
-    summary: "Search paid resources by query and filters.",
+    summary:
+      "Search paid resources by query and filters. Queries are scored against a deterministic cost budget (maximum 50) before execution; over-budget queries are rejected with QUERY_TOO_COMPLEX. See docs/api/search-query-limits.md.",
     tags: ["discovery"],
+    parameters: [
+      {
+        name: "q",
+        in: "query",
+        description:
+          "Free-text query. Maximum 200 characters and 20 terms; each term costs 2 against the query cost budget.",
+        schema: { type: "string", maxLength: 200 }
+      },
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
     conditionalGet: true,
     response: jsonObject
   },
@@ -1181,6 +1281,7 @@ export function buildOpenApiSpec(
       operationId: contract.operationId,
       summary: contract.summary,
       tags: contract.tags,
+      ...(contract.parameters === undefined ? {} : { parameters: contract.parameters }),
       ...(contract.parameters === undefined && contract.conditionalGet !== true
         ? {}
         : {
