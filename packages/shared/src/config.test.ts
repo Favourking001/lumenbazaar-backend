@@ -16,7 +16,9 @@ describe("loadConfig", () => {
     });
     expect(config.settlement).toEqual({
       maxTransactionFeeStroops: 50_000,
-      inclusionFeeStroops: 100
+      inclusionFeeStroops: 100,
+      feeCeilingStroops: 50_000,
+      feeCeilingOverrideEnabled: false
     });
     expect(config.networks["stellar:testnet"].passphrase).toContain("Test SDF Network");
     expect(config.networks["stellar:testnet"].assets[0]).toMatchObject({
@@ -40,6 +42,41 @@ describe("loadConfig", () => {
         STELLAR_INCLUSION_FEE_STROOPS: "101"
       })
     ).toThrow("must not exceed");
+  });
+
+  it("defaults the fee ceiling to the maximum transaction fee", () => {
+    expect(loadConfig({}).settlement.feeCeilingStroops).toBe(50_000);
+    expect(
+      loadConfig({ STELLAR_MAX_TRANSACTION_FEE_STROOPS: "80000" }).settlement.feeCeilingStroops
+    ).toBe(80_000);
+  });
+
+  it("accepts an explicit fee ceiling below the maximum transaction fee", () => {
+    const config = loadConfig({ STELLAR_FEE_CEILING_STROOPS: "10000" });
+
+    expect(config.settlement.feeCeilingStroops).toBe(10_000);
+    expect(config.settlement.maxTransactionFeeStroops).toBe(50_000);
+  });
+
+  it("rejects a fee ceiling below the inclusion fee or above the maximum transaction fee", () => {
+    expect(() =>
+      loadConfig({
+        STELLAR_INCLUSION_FEE_STROOPS: "101",
+        STELLAR_FEE_CEILING_STROOPS: "100"
+      })
+    ).toThrow("must not be below");
+    expect(() => loadConfig({ STELLAR_FEE_CEILING_STROOPS: "50001" })).toThrow("must not exceed");
+  });
+
+  it("denies fee ceiling overrides by default and enables them explicitly", () => {
+    expect(loadConfig({}).settlement.feeCeilingOverrideEnabled).toBe(false);
+    expect(
+      loadConfig({ STELLAR_FEE_CEILING_OVERRIDE_ENABLED: "true" }).settlement
+        .feeCeilingOverrideEnabled
+    ).toBe(true);
+    expect(
+      loadConfig({ STELLAR_FEE_CEILING_OVERRIDE_ENABLED: "1" }).settlement.feeCeilingOverrideEnabled
+    ).toBe(true);
   });
 
   it("fails closed for mainnet without an explicit pubnet USDC issuer", () => {
@@ -154,16 +191,18 @@ describe("loadConfig", () => {
       loadConfig({
         FACILITATOR_SIGNER_PROVIDER: "cloud-kms",
         FACILITATOR_SIGNER_NETWORK: "stellar:pubnet",
-        FACILITATOR_SIGNER_KMS_KEY_ID: "projects/test/locations/global/keyRings/ring/cryptoKeys/key",
-        FACILITATOR_SIGNER_KMS_PUBLIC_KEY: "GCYEX7MPJL64ZJ7ABZSPRC7YEBSI7OMC62FFEVFHCZFREBOYJPQDUCYJ"
+        FACILITATOR_SIGNER_KMS_KEY_ID:
+          "projects/test/locations/global/keyRings/ring/cryptoKeys/key",
+        FACILITATOR_SIGNER_KMS_PUBLIC_KEY:
+          "GCYEX7MPJL64ZJ7ABZSPRC7YEBSI7OMC62FFEVFHCZFREBOYJPQDUCYJ"
       } as never)
     ).toThrow("FACILITATOR_SIGNER_NETWORK must match the active Stellar network");
   });
 
   it("rejects an unknown signer provider", () => {
-    expect(() =>
-      loadConfig({ FACILITATOR_SIGNER_PROVIDER: "unknown-provider" } as never)
-    ).toThrow(ZodError);
+    expect(() => loadConfig({ FACILITATOR_SIGNER_PROVIDER: "unknown-provider" } as never)).toThrow(
+      ZodError
+    );
   });
 
   it("does not fall back to environment signing when cloud KMS is configured", () => {

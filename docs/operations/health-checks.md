@@ -58,6 +58,7 @@ The response body always has the same shape regardless of HTTP status:
     "stellarRpc": { "status": "timeout",      "latencyMs": 2001, "reason": "probe_timeout" },
     "horizon":    { "status": "ready",        "latencyMs": 45 },
     "signer":     { "status": "not_required" },
+    "secretProviders": { "status": "ready", "latencyMs": 2 },
     "migrations": { "status": "ready",        "latencyMs": 9 },
     "assets":     { "status": "unavailable", "reason": "dependency_check_failed" }
   },
@@ -139,8 +140,39 @@ Errors are always mapped to stable reason codes: `dependency_check_failed` or `p
 | Stellar RPC | `getLatestLedger` JSON-RPC | Checks for a valid `result` field |
 | Horizon | `GET /` | Checks for HTTP 2xx |
 | Signer | `assertReady()` + state check | Only probed when a payment adapter is enabled |
+| Secret providers | Startup secret-provider checks (see below) | Summarises the startup checks; no I/O at request time |
 | Migrations | `_prisma_migrations` query | Checks all required migrations are applied |
 | Assets | Config validation | Checks networks have real (non-placeholder) asset issuers |
+
+---
+
+## Startup secret-provider health checks
+
+Before the API serves traffic, `main.ts` validates each **configured** secret provider (issue #113): the facilitator signer (environment or KMS) and the event-stream signing secret (`EVENT_STREAM_SIGNING_SECRET`). The checks confirm the provider is reachable and that the referenced keys exist and carry the required metadata/permissions — **without signing any production payload** and **without logging secret material**:
+
+- **Facilitator signer** — calls the signer provider's `assertReady()` and `getStatus()` (reachability, key existence, address/network match, active state). It never calls `sign()`.
+- **Event-stream signing secret** — HMAC-signs and verifies a fixed synthetic sentinel string with the configured secret. The secret is identified in logs only by a truncated SHA-256 fingerprint (`sha256:<first 12 hex chars>`).
+
+Providers that are not configured at all are not probed: their capability is simply not enabled, and `secretProviders` reports `not_required`.
+
+**Failure is fail-closed per capability.** A failed check blocks only the capability that requires that secret — a failed signer check drops the signer provider so the `exact`/`upto` schemes are not advertised, and a failed event-stream secret check disables authenticated receipt streams — while the API still starts and serves everything else. The failure is visible in two places:
+
+- Startup logs: one redacted JSON line per check (`secret_provider_startup_check` with capability, provider, public key id, outcome, stable reason code, latency). Key ids are public references only (key version, KMS key id, or fingerprint) and are passed through the shared redaction helpers before logging.
+- `/ready`: the `secretProviders` check is `unavailable` with the stable failure reason code, the `signer` check reports `unavailable` with that same reason (instead of a misleading `not_configured`) when the signer was configured but failed, and the report's `ok` is `false`.
+
+Stable failure reason codes (raw provider errors are never surfaced):
+
+| Reason | Meaning |
+|---|---|
+| `provider_not_configured` | A required secret provider (or its adapter) is not wired; capability cannot be served |
+| `provider_unreachable` | The provider could not be reached (network / connection failure) |
+| `key_not_found` | The referenced key does not exist or its material is unavailable |
+| `insufficient_permissions` | The provider denied the operation; the configured identity lacks a required permission |
+| `key_metadata_invalid` | The key exists but its metadata does not match configuration (wrong address, network, or non-active state) |
+| `check_timeout` | The check did not complete within its 5 s deadline |
+| `check_failed` | The check threw an unclassified error |
+
+Checks run in parallel with a 5 s per-probe timeout, so they do not block unrelated startup work.
 
 ---
 
@@ -150,8 +182,9 @@ Errors are always mapped to stable reason codes: `dependency_check_failed` or `p
 2. `unavailable` — the dependency is reachable but unhealthy. Check the dependency's own logs.
 3. `timeout` — the dependency didn't respond within `READINESS_PROBE_TIMEOUT_MS`. Check for network issues or overload.
 4. `not_configured` — a required dependency has no probe. Check that the relevant environment variables are set (e.g., `DATABASE_URL`, `REDIS_URL`, `FACILITATOR_SIGNER_PROVIDER`).
-5. Once the dependency recovers, `/ready` will automatically return 200 on the next probe — no restart needed.
-6. While `/ready` is 503, `/health` continues to return 200. Do not restart the process based on `/ready` alone.
+5. `secretProviders` is `unavailable` — a configured secret provider failed its startup health check. The `reason` code names the failure (`provider_unreachable`, `key_not_found`, `insufficient_permissions`, `key_metadata_invalid`, `check_timeout`, `check_failed`, `provider_not_configured`); the startup log line for that capability shows the same reason plus the public key id. Fix the provider/key/permissions and restart — the check runs at startup only, so a restart is required for the capability to come back. While it is failed, the affected capability stays disabled (fail closed) and everything else keeps serving.
+6. Once the dependency recovers, `/ready` will automatically return 200 on the next probe — no restart needed.
+7. While `/ready` is 503, `/health` continues to return 200. Do not restart the process based on `/ready` alone.
 
 ---
 

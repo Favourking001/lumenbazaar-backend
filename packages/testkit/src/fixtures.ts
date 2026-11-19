@@ -172,6 +172,19 @@ export const testPaymentConfigEnv = {
   STELLAR_TESTNET_USDC_CONTRACT_ID: testAssetContractId
 };
 
+/**
+ * Below-ceiling settlement fee quote for fake adapters.
+ * The default fee ceiling is 50,000 stroops; this quote is well under it,
+ * so settlements using fake adapters pass the pre-signing fee ceiling gate.
+ */
+export const testFeeQuote = {
+  feeStroops: 200,
+  resourceFeeStroops: 100,
+  inclusionFeeStroops: 100
+};
+
+export const stubQuoteSettlementFee = async () => testFeeQuote;
+
 export function createTestPaymentRequest(seed = "default") {
   const paymentRequirements = {
     ...testPaymentRequirement,

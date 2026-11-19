@@ -8,6 +8,10 @@ import {
   type SearchDocument,
   LumenError,
   normalizeLimit
+  assertSearchQueryWithinLimits,
+  maxSearchCandidates,
+  normalizeLimit,
+  tokenizeSearchQuery
 } from "@lumenbazaar/shared";
 
 import { type ResourceService } from "./resources.js";
@@ -107,6 +111,8 @@ export class SearchService {
 
     try {
       const filters = searchResourcesSchema.parse(input);
+      // Enforce query cost and result caps before any database work.
+      assertSearchQueryWithinLimits(filters);
       const limit = normalizeLimit(filters.limit);
       const query = JSON.stringify([
         filters.q ?? "",
@@ -165,6 +171,14 @@ export class SearchService {
           );
         sourceCursor = page.nextCursor ?? undefined;
       } while (sourceCursor !== undefined);
+      const page = await this.resourceService.listResources({
+        limit: maxSearchCandidates,
+        status: "active",
+        ...(filters.network === undefined ? {} : { network: filters.network }),
+        ...(filters.asset === undefined ? {} : { asset: filters.asset }),
+        ...(filters.type === undefined ? {} : { type: filters.type }),
+        ...(filters.sellerId === undefined ? {} : { sellerId: filters.sellerId })
+      });
       const queryTerms = tokenize(filters.q ?? "");
       const documentEntries = await Promise.all(
         allResources.map(
@@ -300,8 +314,5 @@ function countProperties(schema: JsonObject) {
 }
 
 function tokenize(query: string) {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((term) => term.length > 0);
+  return tokenizeSearchQuery(query);
 }

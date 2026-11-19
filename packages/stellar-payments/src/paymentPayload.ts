@@ -8,6 +8,7 @@ import { type PaymentPayload, type PaymentRequirements } from "@x402/core/types"
 
 import {
   LumenError,
+  assertPaymentMemoPolicy,
   type AppConfig,
   type NetworkId,
   isSupportedNetwork,
@@ -107,6 +108,12 @@ export function parseVerifyPaymentRequest(
     );
   }
   assertBase64Transaction(transaction);
+  // Single shared enforcement point for the memo and muxed-account policy.
+  // Both verification and settlement parse through here, so an unsupported
+  // memo or destination is rejected before the adapter verifies or signs.
+  // Payloads that do not decode as Stellar XDR are left to the official
+  // verifier, which rejects malformed transactions before signing.
+  assertPaymentMemoPolicy(transaction, paymentRequirements.network);
 
   return {
     x402Version: 2,

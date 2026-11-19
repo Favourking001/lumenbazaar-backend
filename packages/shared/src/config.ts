@@ -48,7 +48,8 @@ const optionalNonEmptyStringEnv = z
  * Issuer: Circle's official testnet USDC issuer (https://developers.circle.com/stablecoins/quickstarts/transfer-usdc-stellar)
  * For Soroban contract ID, use `stellar contract id asset USDC:<issuer>` on testnet.
  */
-const STELLAR_TESTNET_USDC_ISSUER_OFFICIAL = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+const STELLAR_TESTNET_USDC_ISSUER_OFFICIAL =
+  "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
 /**
  * Configuration key for selecting testnet exact payment asset.
@@ -66,7 +67,7 @@ const testnetAssetConfigKey = (env: { TESTNET_ASSET?: string }) => {
   return assetKey as "usdc" | "lbt";
 };
 
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default(process.env.NODE_ENV === "test" ? "test" : "development"),
@@ -87,7 +88,7 @@ const envSchema = z.object({
   ENABLE_UPTO_SCHEME: booleanEnv.default(false),
   DEFAULT_ASSET_CODE: z.string().min(1).max(12).default("USDC"),
   STELLAR_TESTNET_RPC_URL: z.string().url().default("https://soroban-testnet.stellar.org"),
-    STELLAR_TESTNET_RPC_URLS: z.string().optional(),
+  STELLAR_TESTNET_RPC_URLS: z.string().optional(),
   STELLAR_TESTNET_HORIZON_URL: z.string().url().default("https://horizon-testnet.stellar.org"),
   /**
    * Official testnet USDC issuer: Circle's public testnet issuer.
@@ -106,7 +107,7 @@ const envSchema = z.object({
   TESTNET_LBT_CONTRACT_ID: optionalNonEmptyStringEnv,
   STELLAR_TESTNET_UPTO_SESSION_CONTRACT_ID: optionalNonEmptyStringEnv,
   STELLAR_PUBNET_RPC_URL: z.string().url().default("https://mainnet.sorobanrpc.com"),
-    STELLAR_PUBNET_RPC_URLS: z.string().optional(),
+  STELLAR_PUBNET_RPC_URLS: z.string().optional(),
   STELLAR_PUBNET_HORIZON_URL: z.string().url().default("https://horizon.stellar.org"),
   /**
    * Pubnet USDC issuer. Must be explicitly configured for mainnet deployment.
@@ -128,11 +129,353 @@ const envSchema = z.object({
   FACILITATOR_KMS_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   EVENT_STREAM_SIGNING_SECRET: optionalNonEmptyStringEnv,
   STELLAR_MAX_TRANSACTION_FEE_STROOPS: z.coerce.number().int().positive().default(50_000),
-  STELLAR_INCLUSION_FEE_STROOPS: z.coerce.number().int().positive().default(100)
+  STELLAR_INCLUSION_FEE_STROOPS: z.coerce.number().int().positive().default(100),
+  /**
+   * Repo-enforced settlement fee ceiling in stroops, checked immediately
+   * before signing (see docs/payments/settlement-fee-ceilings.md).
+   * Defaults to STELLAR_MAX_TRANSACTION_FEE_STROOPS when unset and must
+   * never exceed it: the maximum is the outer bound the settlement adapter
+   * enforces, so a ceiling above it could never take effect.
+   */
+  STELLAR_FEE_CEILING_STROOPS: z.coerce.number().int().positive().optional(),
+  /**
+   * Deployment-level gate for per-settlement fee ceiling overrides.
+   * Default deny: overrides are honoured only when this is explicitly true
+   * and the settlement call supplies an override with an operator identity
+   * and a reason.
+   */
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false)
 });
 
 export type RawEnv = z.input<typeof envSchema>;
 export type ParsedEnv = z.output<typeof envSchema>;
+
+/**
+ * Sensitivity of a configuration key for documentation purposes.
+ *
+ * - `secret`: the value is a credential (or can carry one, as with a
+ *   connection string). Generated documentation must never print the value
+ *   or the schema default for such a key; it is rendered as `<redacted>`.
+ * - `non-secret`: the value is a public identifier, URL, or plain setting
+ *   and the schema default is safe to show in generated documentation.
+ */
+export type ConfigKeySensitivity = "secret" | "non-secret";
+
+export type ConfigKeySection =
+  | "runtime"
+  | "api"
+  | "data"
+  | "features"
+  | "stellar-testnet"
+  | "stellar-pubnet"
+  | "facilitator"
+  | "settlement"
+  | "events";
+
+export type ConfigKeyMetadata = {
+  /** Which app, package, or service consumes the key. */
+  owner: string;
+  sensitivity: ConfigKeySensitivity;
+  /** Section the key is grouped under in the generated reference. */
+  section: ConfigKeySection;
+  /** One-line description of what the key controls. */
+  description: string;
+  /**
+   * Display override for the default value, used only when the schema
+   * default depends on the process environment at import time (NODE_ENV).
+   * When set, the generator renders this instead of the introspected default
+   * so the generated reference stays deterministic.
+   */
+  defaultDisplay?: string;
+  /** Extra default/requirement semantics (conditional requirements, etc.). */
+  notes?: string;
+};
+
+/**
+ * Authoritative per-key metadata for every key in {@link envSchema}.
+ *
+ * Type and required/optional/default semantics are NOT duplicated here:
+ * the reference generator introspects `envSchema` directly, so a schema
+ * change is reflected in the generated docs (and `pnpm
+ * config:reference:check` fails until the reference is regenerated).
+ * This table supplies only what the schema cannot express: ownership,
+ * sensitivity, and a human description. It is keyed by `keyof RawEnv`,
+ * so adding a schema key without a metadata entry (or leaving a stale
+ * entry behind) is a compile error.
+ */
+export const configKeyMetadata: Record<keyof RawEnv, ConfigKeyMetadata> = {
+  NODE_ENV: {
+    owner: "api, mcp-server, worker",
+    sensitivity: "non-secret",
+    section: "runtime",
+    description: "Node runtime mode: development, test, or production.",
+    defaultDisplay: "`development` (`test` when `NODE_ENV=test`)",
+    notes: "Hosted-environment placeholder checks only run when production."
+  },
+  LUMEN_ENV: {
+    owner: "api, mcp-server, worker",
+    sensitivity: "non-secret",
+    section: "runtime",
+    description:
+      "Deployment environment: local, testnet, staging, or mainnet. Selects the active Stellar network.",
+    notes: "mainnet selects stellar:pubnet; every other value selects stellar:testnet."
+  },
+  TESTNET_ASSET: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "runtime",
+    description:
+      "Exact-payment asset on testnet: usdc (official Stellar testnet USDC) or lbt (custom test-only asset).",
+    notes: "lbt is rejected on mainnet; only USDC is supported for production."
+  },
+  API_HOST: {
+    owner: "api",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Host interface the API server binds to."
+  },
+  API_PORT: {
+    owner: "api",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Port the API server listens on."
+  },
+  API_PUBLIC_URL: {
+    owner: "api",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Public base URL of the API, used in readiness checks and advertised endpoints.",
+    notes: "Must not be a localhost or placeholder value in hosted environments."
+  },
+  MCP_PUBLIC_URL: {
+    owner: "api, mcp-server",
+    sensitivity: "non-secret",
+    section: "api",
+    description: "Public URL of the MCP Streamable HTTP endpoint.",
+    notes: "Must not be a localhost or placeholder value in hosted environments."
+  },
+  CORS_ALLOWED_ORIGINS: {
+    owner: "api",
+    sensitivity: "non-secret",
+    section: "api",
+    description:
+      "Comma-separated list of origins allowed by API CORS. At least one origin is required."
+  },
+  DATABASE_URL: {
+    owner: "api, worker",
+    sensitivity: "secret",
+    section: "data",
+    description: "Postgres connection string used by the Prisma client.",
+    notes:
+      "Connection string; supply via the hosting provider's secret manager in hosted environments. The schema default is a local-development value only."
+  },
+  REDIS_URL: {
+    owner: "api, worker",
+    sensitivity: "secret",
+    section: "data",
+    description: "Redis connection string used by queues and rate limiting.",
+    notes:
+      "Connection string; supply via the hosting provider's secret manager in hosted environments. The schema default is a local-development value only."
+  },
+  ENABLE_UPTO_SCHEME: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "features",
+    description: "Enables the UPTO payment scheme when true.",
+    notes: "Requires the active asset and upto session contract IDs in hosted environments."
+  },
+  DEFAULT_ASSET_CODE: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "features",
+    description:
+      "Default asset code accepted for exact payments. Validated and upper-cased at startup.",
+    notes: "Validated by loadConfig; not currently surfaced in AppConfig."
+  },
+  STELLAR_TESTNET_RPC_URL: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Primary Soroban RPC URL for Stellar testnet."
+  },
+  STELLAR_TESTNET_RPC_URLS: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description:
+      "Optional comma-separated list of Soroban RPC URLs for Stellar testnet (failover).",
+    notes: "Falls back to STELLAR_TESTNET_RPC_URL when unset."
+  },
+  STELLAR_TESTNET_HORIZON_URL: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Horizon API URL for Stellar testnet."
+  },
+  STELLAR_TESTNET_USDC_ISSUER: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Issuer of official Stellar testnet USDC (Circle). Public identifier.",
+    notes: "Only used when TESTNET_ASSET=usdc (the default)."
+  },
+  STELLAR_TESTNET_USDC_CONTRACT_ID: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Soroban contract ID of the testnet USDC asset contract, when deployed."
+  },
+  TESTNET_LBT_ISSUER: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Issuer of the custom Lumen Bazaar test-only (LBT) asset.",
+    notes:
+      "Only used when TESTNET_ASSET=lbt. Defaults at runtime to the local placeholder issuer when unset."
+  },
+  TESTNET_LBT_CONTRACT_ID: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Soroban contract ID of the LBT test-only asset contract, when deployed.",
+    notes: "Only used when TESTNET_ASSET=lbt."
+  },
+  STELLAR_TESTNET_UPTO_SESSION_CONTRACT_ID: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-testnet",
+    description: "Soroban contract ID of the upto session contract on testnet, when deployed.",
+    notes: "Required when ENABLE_UPTO_SCHEME is true in hosted environments."
+  },
+  STELLAR_PUBNET_RPC_URL: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Primary Soroban RPC URL for Stellar pubnet (mainnet)."
+  },
+  STELLAR_PUBNET_RPC_URLS: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Optional comma-separated list of Soroban RPC URLs for Stellar pubnet (failover).",
+    notes: "Falls back to STELLAR_PUBNET_RPC_URL when unset."
+  },
+  STELLAR_PUBNET_HORIZON_URL: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Horizon API URL for Stellar pubnet (mainnet)."
+  },
+  STELLAR_PUBNET_USDC_ISSUER: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Issuer of USDC on Stellar pubnet. Public identifier.",
+    notes:
+      "The schema default is the local placeholder issuer and must be replaced before mainnet startup; loadConfig fails on mainnet while the placeholder is configured."
+  },
+  STELLAR_PUBNET_USDC_CONTRACT_ID: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Soroban contract ID of the pubnet USDC asset contract, when deployed."
+  },
+  STELLAR_PUBNET_UPTO_SESSION_CONTRACT_ID: {
+    owner: "api, worker",
+    sensitivity: "non-secret",
+    section: "stellar-pubnet",
+    description: "Soroban contract ID of the upto session contract on pubnet, when deployed.",
+    notes: "Required when ENABLE_UPTO_SCHEME is true in hosted environments."
+  },
+  FACILITATOR_ACCOUNT: {
+    owner: "api, worker, stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description: "Stellar account that facilitates exact payments. Public identifier.",
+    notes:
+      "The schema default is the local placeholder account and must be replaced in hosted environments."
+  },
+  FACILITATOR_SIGNER_PROVIDER: {
+    owner: "api, worker, stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description:
+      "How the facilitator signs: disabled, environment (key from the environment), or kms (cloud KMS).",
+    notes:
+      "disabled means no signing; the signer network must match the active Stellar network when signing is enabled."
+  },
+  FACILITATOR_SIGNER_NETWORK: {
+    owner: "api, worker, stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description:
+      "Stellar network the facilitator signer operates on: stellar:testnet or stellar:pubnet.",
+    notes: "Must match the active Stellar network when signing is enabled."
+  },
+  FACILITATOR_SIGNING_KEY_VERSION: {
+    owner: "api, worker, stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description:
+      "Version label of the facilitator signing key (secret-manager version, not the key itself).",
+    notes:
+      "Required for hosted environment signers; the key material itself is supplied separately as FACILITATOR_SIGNING_KEY."
+  },
+  FACILITATOR_KMS_PROVIDER: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description: "Cloud KMS provider name used when the signer provider is kms.",
+    notes: "Required when FACILITATOR_SIGNER_PROVIDER=kms."
+  },
+  FACILITATOR_KMS_KEY_ID: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description:
+      "Cloud KMS key resource identifier used when the signer provider is kms. An identifier, not key material.",
+    notes: "Required when FACILITATOR_SIGNER_PROVIDER=kms."
+  },
+  FACILITATOR_KMS_REGION: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description: "Cloud KMS region used when the signer provider is kms."
+  },
+  FACILITATOR_KMS_ENDPOINT: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description: "Optional custom endpoint for the cloud KMS provider."
+  },
+  FACILITATOR_KMS_TIMEOUT_MS: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "facilitator",
+    description: "Timeout in milliseconds for cloud KMS operations."
+  },
+  EVENT_STREAM_SIGNING_SECRET: {
+    owner: "api",
+    sensitivity: "secret",
+    section: "events",
+    description:
+      "Secret used to sign event-stream payloads. When unset, signed event streams are unavailable.",
+    notes: "Supply via the hosting provider's secret manager; never commit a value."
+  },
+  STELLAR_MAX_TRANSACTION_FEE_STROOPS: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum Stellar transaction fee in stroops for settlement transactions."
+  },
+  STELLAR_INCLUSION_FEE_STROOPS: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Inclusion fee bid in stroops for settlement transactions.",
+    notes: "Must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
+  }
+};
 
 export type AppConfig = {
   nodeEnv: ParsedEnv["NODE_ENV"];
@@ -164,6 +507,8 @@ export type AppConfig = {
   settlement: {
     maxTransactionFeeStroops: number;
     inclusionFeeStroops: number;
+    feeCeilingStroops: number;
+    feeCeilingOverrideEnabled: boolean;
   };
   eventStreams: {
     signingSecret: string | undefined;
@@ -184,10 +529,10 @@ export function loadConfig(
 ): AppConfig {
   const env = envSchema.parse(input);
   const defaultAssetCode = env.DEFAULT_ASSET_CODE.toUpperCase();
-  
+
   // Determine which testnet asset configuration to use
   const testnetAssetKind = testnetAssetConfigKey(env);
-  
+
   // Build testnet asset configuration based on TESTNET_ASSET selection
   let testnetAsset: SupportedAsset;
   if (testnetAssetKind === "usdc") {
@@ -297,7 +642,9 @@ export function loadConfig(
     },
     settlement: {
       maxTransactionFeeStroops: env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
-      inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS
+      inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS,
+      feeCeilingStroops: env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
+      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED
     },
     eventStreams: {
       signingSecret: env.EVENT_STREAM_SIGNING_SECRET
@@ -325,6 +672,17 @@ function assertEnvironmentConfiguration(
   if (env.STELLAR_INCLUSION_FEE_STROOPS > env.STELLAR_MAX_TRANSACTION_FEE_STROOPS) {
     throw new Error(
       "STELLAR_INCLUSION_FEE_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
+    );
+  }
+
+  const feeCeilingStroops =
+    env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS;
+  if (env.STELLAR_INCLUSION_FEE_STROOPS > feeCeilingStroops) {
+    throw new Error("STELLAR_FEE_CEILING_STROOPS must not be below STELLAR_INCLUSION_FEE_STROOPS.");
+  }
+  if (feeCeilingStroops > env.STELLAR_MAX_TRANSACTION_FEE_STROOPS) {
+    throw new Error(
+      "STELLAR_FEE_CEILING_STROOPS must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
     );
   }
 

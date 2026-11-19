@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   LumenError,
+  type MutationActor,
   type AppConfig,
   type JsonObject,
   type PaymentRequirement,
@@ -13,6 +14,7 @@ import {
   type ResourceVersion,
   decodeCursor,
   encodeCursor,
+  maxResultWindow,
   normalizeLimit,
   validateRouteTemplate
 } from "@lumenbazaar/shared";
@@ -46,7 +48,14 @@ export const createResourceSchema = z.object({
   status: z.enum(["draft", "active", "inactive"]).default("active")
 });
 
-export const updateResourceSchema = createResourceSchema.partial().omit({ sellerId: true });
+export const updateResourceSchema = createResourceSchema.partial().omit({ sellerId: true }).extend({
+  /**
+   * Optimistic-concurrency precondition: the resource `version` the caller
+   * read. The update only applies when it still matches the stored version.
+   * Equivalent to the `If-Match` header; the header wins when both are sent.
+   */
+  version: z.number().int().positive().optional()
+});
 
 export const listResourcesSchema = z.object({
   sellerId: z.string().optional(),
@@ -65,10 +74,24 @@ export type CreateResourceInput = z.output<typeof createResourceSchema>;
 export type UpdateResourceInput = z.output<typeof updateResourceSchema>;
 export type ListResourceFilters = z.output<typeof listResourcesSchema>;
 
+export type ResourceMutationOptions = {
+  /**
+   * Optimistic-concurrency precondition: the resource `version` the caller
+   * read. Required. The mutation only applies when it still matches the
+   * stored version; otherwise the store throws RESOURCE_VERSION_CONFLICT.
+   */
+  expectedVersion: number;
+};
+
 export type ResourceStore = {
   createResource: (input: CreateResourceInput) => Promise<Resource>;
   getResource: (resourceId: string) => Promise<Resource | undefined>;
-  updateResource: (resourceId: string, input: UpdateResourceInput) => Promise<Resource>;
+  updateResource: (
+    resourceId: string,
+    input: UpdateResourceInput,
+    actor?: MutationActor
+    options: ResourceMutationOptions
+  ) => Promise<Resource>;
   listResources: (
     filters: ListResourceFilters
   ) => Promise<{ resources: Resource[]; nextCursor: string | null }>;
@@ -79,7 +102,9 @@ export type ResourceStore = {
   rollbackResource: (
     resourceId: string,
     patch: UpdateResourceInput,
-    metadata: JsonObject
+    metadata: JsonObject,
+    actor?: MutationActor
+    options: ResourceMutationOptions
   ) => Promise<{ resource: Resource; version: ResourceVersion }>;
   createSchema: (resource: Resource) => Promise<ResourceSchema>;
   createPaymentRequirement: (resource: Resource) => Promise<PaymentRequirement>;
@@ -118,6 +143,7 @@ export class InMemoryResourceStore implements ResourceStore {
       outputSchema: input.outputSchema as JsonObject,
       extensions: input.extensions as JsonObject,
       status: input.status,
+      version: 1,
       createdAt: now,
       updatedAt: now
     };
@@ -134,12 +160,22 @@ export class InMemoryResourceStore implements ResourceStore {
     return this.resources.get(resourceId);
   }
 
-  async updateResource(resourceId: string, input: UpdateResourceInput) {
+  async updateResource(
+    resourceId: string,
+    input: UpdateResourceInput,
+    options: ResourceMutationOptions
+  ) {
     const existing = this.resources.get(resourceId);
 
     if (existing === undefined) {
       throw new LumenError("RESOURCE_NOT_FOUND", "Resource was not found.");
     }
+
+    // Atomic compare-and-swap: the version check and the increment happen
+    // synchronously, with no await between them, so no concurrent writer can
+    // interleave and both succeed. The Prisma store enforces the same rule
+    // with a single conditional UPDATE ... WHERE version = expected.
+    assertExpectedVersion(existing, options);
 
     const updated: Resource = {
       ...existing,
@@ -157,6 +193,7 @@ export class InMemoryResourceStore implements ResourceStore {
       outputSchema: (input.outputSchema ?? existing.outputSchema) as JsonObject,
       extensions: (input.extensions ?? existing.extensions) as JsonObject,
       status: input.status ?? existing.status,
+      version: existing.version + 1,
       updatedAt: new Date().toISOString()
     };
 
@@ -169,6 +206,18 @@ export class InMemoryResourceStore implements ResourceStore {
   async listResources(filters: ListResourceFilters) {
     const limit = normalizeLimit(filters.limit);
     const cursor = decodeCursor(filters.cursor);
+    if (cursor?.depth !== undefined && cursor.depth >= maxResultWindow) {
+      throw new LumenError(
+        "RESULT_WINDOW_EXCEEDED",
+        `Result window of ${maxResultWindow} results exceeded. Narrow the filters instead of paging further.`,
+        {
+          details: {
+            depth: cursor.depth,
+            maxResultWindow
+          }
+        }
+      );
+    }
     const filtered = [...this.resources.values()]
       .filter((resource) => resourceMatchesFilters(resource, filters))
       .sort(
@@ -185,7 +234,11 @@ export class InMemoryResourceStore implements ResourceStore {
       nextCursor:
         last === undefined || startIndex + limit >= filtered.length
           ? null
-          : encodeCursor({ id: last.id, createdAt: last.createdAt })
+          : encodeCursor({
+              id: last.id,
+              createdAt: last.createdAt,
+              depth: Math.max(startIndex, 0) + page.length
+            })
     };
   }
 
@@ -212,17 +265,28 @@ export class InMemoryResourceStore implements ResourceStore {
   }
 
   async listVersions(resourceId: string) {
-    return [...(this.versions.get(resourceId) ?? [])].sort((left, right) => left.version - right.version);
+    return [...(this.versions.get(resourceId) ?? [])].sort(
+      (left, right) => left.version - right.version
+    );
   }
 
-  async rollbackResource(resourceId: string, patch: UpdateResourceInput, metadata: JsonObject) {
+  async rollbackResource(
+    resourceId: string,
+    patch: UpdateResourceInput,
+    metadata: JsonObject,
+    options: ResourceMutationOptions
+  ) {
     const existing = this.resources.get(resourceId);
     if (existing === undefined) {
       throw new LumenError("RESOURCE_NOT_FOUND", "Resource was not found.");
     }
+    // Same atomic compare-and-swap as updateResource: check and increment
+    // synchronously so a concurrent writer cannot slip in between.
+    assertExpectedVersion(existing, options);
     const updated: Resource = {
       ...existing,
       ...patch,
+      version: existing.version + 1,
       updatedAt: new Date().toISOString()
     };
     this.resources.set(resourceId, updated);
@@ -274,7 +338,7 @@ export class ResourceService {
 
   async createResource(input: unknown, sellerContext?: { sellerId: string; auditable: boolean }) {
     const resource = normalizeResourceInput(createResourceSchema.parse(input), this.config);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && resource.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -289,12 +353,9 @@ export class ResourceService {
           actualSellerId: sellerContext.sellerId
         }
       });
-      throw new LumenError(
-        "FORBIDDEN",
-        "API key cannot create resources for another seller."
-      );
+      throw new LumenError("FORBIDDEN", "API key cannot create resources for another seller.");
     }
-    
+
     const seller = await this.sellerService.getSeller(resource.sellerId);
     assertSafeResourceTarget(resource.url, resource.type, resource.routeTemplate, seller.domain);
     const created = await this.store.createResource(resource);
@@ -317,9 +378,15 @@ export class ResourceService {
     return resource;
   }
 
-  async updateResource(resourceId: string, input: unknown, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async updateResource(
+    resourceId: string,
+    input: unknown,
+    sellerContext?: { sellerId: string; auditable: boolean }
+    sellerContext?: { sellerId: string; auditable: boolean },
+    options?: { expectedVersion?: number | undefined }
+  ) {
     const existing = await this.getResource(resourceId);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && existing.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -336,8 +403,9 @@ export class ResourceService {
       });
       throw new LumenError("FORBIDDEN", "API key does not own this resource.");
     }
-    
+
     const patch = updateResourceSchema.parse(input);
+    const expectedVersion = resolveExpectedVersion(options?.expectedVersion, patch.version);
     const normalized = normalizeResourceInput(mergeResourcePatch(existing, patch), this.config);
 
     const seller = await this.sellerService.getSeller(existing.sellerId);
@@ -347,13 +415,25 @@ export class ResourceService {
       normalized.routeTemplate,
       seller.domain
     );
-    const updated = await this.store.updateResource(resourceId, normalized);
+    const updated = await this.store.updateResource(resourceId, normalized, {
+      actorId: sellerContext?.sellerId ?? "internal",
+      actorType: sellerContext ? "seller" : "system",
+      reason: normalized.status !== existing.status ? "resource.status_change" : "resource.update"
+    });
+    const updated = await this.store.updateResource(resourceId, normalized, { expectedVersion });
     await this.queueLatestVersion(updated.id);
     return updated;
   }
 
-  async deleteResource(resourceId: string, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async deleteResource(
+    resourceId: string,
+    sellerContext?: { sellerId: string; auditable: boolean }
+  ) {
     return this.updateResource(resourceId, { status: "inactive" }, sellerContext);
+    sellerContext?: { sellerId: string; auditable: boolean },
+    options?: { expectedVersion?: number | undefined }
+  ) {
+    return this.updateResource(resourceId, { status: "inactive" }, sellerContext, options);
   }
 
   async listResourceVersions(resourceId: string) {
@@ -375,9 +455,15 @@ export class ResourceService {
    * never modified; rollback creates a new immutable version containing the
    * restored data and queues it for reindexing.
    */
-  async rollbackResource(resourceId: string, targetVersion: number, sellerContext?: { sellerId: string; auditable: boolean }) {
+  async rollbackResource(
+    resourceId: string,
+    targetVersion: number,
+    sellerContext?: { sellerId: string; auditable: boolean }
+    sellerContext?: { sellerId: string; auditable: boolean },
+    options?: { expectedVersion?: number | undefined }
+  ) {
     const existing = await this.getResource(resourceId);
-    
+
     // Enforce seller ownership when seller context is provided (authenticated request)
     if (sellerContext?.auditable && existing.sellerId !== sellerContext.sellerId) {
       await this.auditLogService?.record({
@@ -395,7 +481,9 @@ export class ResourceService {
       });
       throw new LumenError("FORBIDDEN", "API key does not own this resource.");
     }
-    
+
+    const expectedVersion = resolveExpectedVersion(options?.expectedVersion, undefined);
+
     const target = await this.store.getVersion(resourceId, targetVersion);
     if (target === undefined) {
       throw new LumenError("RESOURCE_VERSION_NOT_FOUND", "Resource version was not found.");
@@ -403,10 +491,7 @@ export class ResourceService {
 
     const latest = await this.store.getLatestVersion(resourceId);
     if (latest === undefined || target.version >= latest.version) {
-      throw new LumenError(
-        "CONFLICT",
-        "Can only roll back to an older historical version."
-      );
+      throw new LumenError("CONFLICT", "Can only roll back to an older historical version.");
     }
 
     const metadata: JsonObject = {
@@ -418,7 +503,13 @@ export class ResourceService {
     const { resource, version } = await this.store.rollbackResource(
       resourceId,
       target.metadata as unknown as UpdateResourceInput,
-      metadata
+      metadata,
+      {
+        actorId: sellerContext?.sellerId ?? "internal",
+        actorType: sellerContext ? "seller" : "system",
+        reason: "resource.rollback"
+      }
+      { expectedVersion }
     );
     await this.queueLatestVersion(resource.id);
     return { resource, version };
@@ -574,6 +665,49 @@ export function assertCatalogJsonSafe(value: JsonObject, label: string, maxBytes
     }
   };
   visit(value, 0);
+}
+
+/**
+ * Resolve the optimistic-concurrency precondition for a resource mutation.
+ * The `If-Match` header wins over the `version` body field when both are
+ * sent. A mutation without any precondition is rejected: silent overwrites
+ * of a newer version are exactly what issue #102 removes.
+ */
+export function resolveExpectedVersion(
+  headerVersion: number | undefined,
+  bodyVersion: number | undefined
+): number {
+  const expectedVersion = headerVersion ?? bodyVersion;
+  if (expectedVersion === undefined) {
+    throw new LumenError(
+      "VALIDATION_FAILED",
+      'An expected resource version is required. Send the version you read in the If-Match header (for example: If-Match: "3") or as the version field of the request body.'
+    );
+  }
+  return expectedVersion;
+}
+
+/**
+ * Compare-and-swap guard shared by the in-memory store: reject a stale
+ * write with a typed conflict carrying both versions so the caller can
+ * re-read and retry.
+ */
+export function assertExpectedVersion(
+  existing: Resource,
+  options: ResourceMutationOptions | undefined
+): void {
+  const expectedVersion = options?.expectedVersion;
+  if (expectedVersion === undefined) {
+    throw new LumenError(
+      "VALIDATION_FAILED",
+      "An expected resource version is required for this mutation."
+    );
+  }
+  if (expectedVersion !== existing.version) {
+    throw new LumenError("RESOURCE_VERSION_CONFLICT", "Resource was modified by another writer.", {
+      details: { expectedVersion, currentVersion: existing.version, resourceId: existing.id }
+    });
+  }
 }
 
 function mergeResourcePatch(existing: Resource, patch: UpdateResourceInput): Resource {
