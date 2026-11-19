@@ -15,7 +15,8 @@ export const queueNames = {
   webhookDelivery: "webhook-delivery",
   outboxRelay: "outbox-relay",
   outboxCleanup: "outbox-cleanup",
-  deadLetter: "dead-letter"
+  deadLetter: "dead-letter",
+  quarantine: "dead-letter" // Quarantine jobs use the same dead-letter queue
 } as const;
 
 export type QueueName = (typeof queueNames)[keyof typeof queueNames];
