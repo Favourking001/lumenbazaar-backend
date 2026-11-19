@@ -6,6 +6,8 @@ import { Redis } from "ioredis";
 
 import {
   canonicalResourceUrl,
+  appendPrivilegedAudit,
+  type MutationActor,
   decodeCursor,
   encodeCursor,
   getTraceparent,
@@ -40,6 +42,7 @@ import {
   resourceToMetadata,
   type CreateResourceInput,
   type ListResourceFilters,
+  type ResourceMutationOptions,
   type ResourceStore,
   type UpdateResourceInput
 } from "./resources.js";
@@ -130,22 +133,47 @@ export class PrismaResourceStore implements ResourceStore {
     return row === null ? undefined : mapResource(row);
   }
 
-  async updateResource(resourceId: string, input: UpdateResourceInput) {
+  async updateResource(
+    resourceId: string,
+    input: UpdateResourceInput,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.update" }
+    options: ResourceMutationOptions
+  ) {
     return this.db.$transaction(async (tx) => {
-      const resource = mapResource(
-        await tx.resource.update({
-          where: { id: resourceId },
-          data: resourceUpdateData(input)
-        })
-      );
-      const latest = await tx.resourceVersion.aggregate({
-        where: { resourceId },
-        _max: { version: true }
+      const current = await tx.resource.findUnique({ where: { id: resourceId } });
+      if (current === null) {
+        throw new LumenError("RESOURCE_NOT_FOUND", "Resource was not found.");
+      }
+      assertPrismaExpectedVersion(current.version, resourceId, options);
+
+      // Atomic compare-and-swap: the version predicate and the increment are
+      // a single conditional UPDATE, so two concurrent writers with the same
+      // expected version cannot both succeed — exactly one row matches.
+      const matched = await tx.resource.updateMany({
+        where: { id: resourceId, version: options.expectedVersion },
+        data: { ...resourceUpdateData(input), version: { increment: 1 } }
       });
+      if (matched.count === 0) {
+        const fresh = await tx.resource.findUnique({ where: { id: resourceId } });
+        throw new LumenError(
+          "RESOURCE_VERSION_CONFLICT",
+          "Resource was modified by another writer.",
+          {
+            details: {
+              expectedVersion: options.expectedVersion,
+              currentVersion: fresh?.version ?? current.version,
+              resourceId
+            }
+          }
+        );
+      }
+      const resource = mapResource(
+        await tx.resource.findUniqueOrThrow({ where: { id: resourceId } })
+      );
       await tx.resourceVersion.create({
         data: {
           resourceId,
-          version: (latest._max.version ?? 0) + 1,
+          version: resource.version,
           metadata: json(resourceToMetadata(resource))
         }
       });
@@ -155,6 +183,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.update", resourceId, actor);
       return resource;
     });
   }
@@ -219,23 +248,47 @@ export class PrismaResourceStore implements ResourceStore {
     return rows.map(mapResourceVersion);
   }
 
-  async rollbackResource(resourceId: string, patch: UpdateResourceInput, metadata: JsonObject) {
+  async rollbackResource(
+    resourceId: string,
+    patch: UpdateResourceInput,
+    metadata: JsonObject,
+    actor: MutationActor = { actorId: "internal", actorType: "system", reason: "resource.rollback" }
+    options: ResourceMutationOptions
+  ) {
     return this.db.$transaction(async (tx) => {
-      const resource = mapResource(
-        await tx.resource.update({
-          where: { id: resourceId },
-          data: resourceUpdateData(patch)
-        })
-      );
-      const latest = await tx.resourceVersion.aggregate({
-        where: { resourceId },
-        _max: { version: true }
+      const current = await tx.resource.findUnique({ where: { id: resourceId } });
+      if (current === null) {
+        throw new LumenError("RESOURCE_NOT_FOUND", "Resource was not found.");
+      }
+      assertPrismaExpectedVersion(current.version, resourceId, options);
+
+      // Atomic compare-and-swap, as in updateResource.
+      const matched = await tx.resource.updateMany({
+        where: { id: resourceId, version: options.expectedVersion },
+        data: { ...resourceUpdateData(patch), version: { increment: 1 } }
       });
+      if (matched.count === 0) {
+        const fresh = await tx.resource.findUnique({ where: { id: resourceId } });
+        throw new LumenError(
+          "RESOURCE_VERSION_CONFLICT",
+          "Resource was modified by another writer.",
+          {
+            details: {
+              expectedVersion: options.expectedVersion,
+              currentVersion: fresh?.version ?? current.version,
+              resourceId
+            }
+          }
+        );
+      }
+      const resource = mapResource(
+        await tx.resource.findUniqueOrThrow({ where: { id: resourceId } })
+      );
       const version = mapResourceVersion(
         await tx.resourceVersion.create({
           data: {
             resourceId,
-            version: (latest._max.version ?? 0) + 1,
+            version: resource.version,
             metadata: json(metadata)
           }
         })
@@ -246,6 +299,7 @@ export class PrismaResourceStore implements ResourceStore {
         where: { resourceId },
         data: { stale: true }
       });
+      await appendPrivilegedAudit(tx, "resource.rollback", resourceId, actor);
       return { resource, version };
     });
   }
@@ -447,6 +501,11 @@ function resourceCreateData(input: CreateResourceInput): Prisma.ResourceUnchecke
 }
 
 function resourceUpdateData(input: UpdateResourceInput): Prisma.ResourceUncheckedUpdateInput {
+  // The `version` field of an update payload is the optimistic-concurrency
+  // precondition, never a value to write: the store increments the stored
+  // version itself, atomically, only when the precondition matches.
+  const patch = { ...input };
+  delete patch.version;
   return {
     ...(input.type === undefined ? {} : { type: input.type }),
     ...(input.name === undefined ? {} : { name: input.name }),
@@ -461,13 +520,24 @@ function resourceUpdateData(input: UpdateResourceInput): Prisma.ResourceUnchecke
     ...(input.assetIssuer === undefined ? {} : { assetIssuer: input.assetIssuer }),
     ...(input.amount === undefined ? {} : { amount: input.amount }),
     ...(input.inputSchema === undefined
+    ...(patch.type === undefined ? {} : { type: patch.type }),
+    ...(patch.name === undefined ? {} : { name: patch.name }),
+    ...(patch.description === undefined ? {} : { description: patch.description }),
+    ...(patch.url === undefined ? {} : { url: patch.url }),
+    ...(patch.routeTemplate === undefined ? {} : { routeTemplate: patch.routeTemplate }),
+    ...(patch.network === undefined ? {} : { network: patch.network }),
+    ...(patch.payTo === undefined ? {} : { payTo: patch.payTo }),
+    ...(patch.assetCode === undefined ? {} : { assetCode: patch.assetCode }),
+    ...(patch.assetIssuer === undefined ? {} : { assetIssuer: patch.assetIssuer }),
+    ...(patch.amount === undefined ? {} : { amount: patch.amount }),
+    ...(patch.inputSchema === undefined
       ? {}
-      : { inputSchema: json(input.inputSchema as JsonObject) }),
-    ...(input.outputSchema === undefined
+      : { inputSchema: json(patch.inputSchema as JsonObject) }),
+    ...(patch.outputSchema === undefined
       ? {}
-      : { outputSchema: json(input.outputSchema as JsonObject) }),
-    ...(input.extensions === undefined ? {} : { extensions: json(input.extensions as JsonObject) }),
-    ...(input.status === undefined ? {} : { status: input.status })
+      : { outputSchema: json(patch.outputSchema as JsonObject) }),
+    ...(patch.extensions === undefined ? {} : { extensions: json(patch.extensions as JsonObject) }),
+    ...(patch.status === undefined ? {} : { status: patch.status })
   };
 }
 
@@ -602,6 +672,25 @@ function mapSellerApiKey(row: Prisma.SellerApiKeyGetPayload<object>): SellerApiK
 
 function json(value: JsonObject) {
   return value as Prisma.InputJsonValue;
+}
+
+function assertPrismaExpectedVersion(
+  currentVersion: number,
+  resourceId: string,
+  options: ResourceMutationOptions | undefined
+): void {
+  const expectedVersion = options?.expectedVersion;
+  if (expectedVersion === undefined) {
+    throw new LumenError(
+      "VALIDATION_FAILED",
+      "An expected resource version is required for this mutation."
+    );
+  }
+  if (expectedVersion !== currentVersion) {
+    throw new LumenError("RESOURCE_VERSION_CONFLICT", "Resource was modified by another writer.", {
+      details: { expectedVersion, currentVersion, resourceId }
+    });
+  }
 }
 
 function isUniqueViolation(error: unknown) {

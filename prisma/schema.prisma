@@ -83,6 +83,7 @@ model Resource {
   outputSchema        Json
   extensions          Json
   status              String               @default("active")
+  version             Int                  @default(1)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   seller              Seller               @relation(fields: [sellerId], references: [id], onDelete: Restrict)
@@ -528,3 +529,19 @@ model ProcessedOutboxEvent {
   @@index([aggregateType, aggregateId, consumerId])
 }
 
+
+model PrivilegedMutationAudit {
+  createdAt DateTime @default(now())
+  sequence BigInt @id @default(autoincrement())
+  id String @unique
+  actorId String
+  actorType String
+  action String
+  targetId String
+  targetType String
+  reason String
+  correlationId String
+  outcome String
+  previousHash String
+  recordHash String @unique
+}

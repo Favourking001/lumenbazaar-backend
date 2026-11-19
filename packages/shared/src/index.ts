@@ -9,9 +9,11 @@ export * from "./redactionService.js";
 export * from "./release.js";
 export * from "./errorMapping.js";
 export * from "./errors.js";
+export * from "./memoPolicy.js";
 export * from "./models.js";
 export * from "./networks.js";
 export * from "./pagination.js";
+export * from "./searchLimits.js";
 export * from "./db/client.js";
 export * from "./db/outbox.js";
 export * from "./retentionPolicy.js";
@@ -20,3 +22,4 @@ export * from "./sellerApiKeys.js";
 export * from "./webhooks.js";
 
 export * from "./resourceUrl.js";
+export * from "./db/privilegedAudit.js";

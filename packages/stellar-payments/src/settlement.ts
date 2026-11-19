@@ -13,6 +13,15 @@ import { type PaymentStatePersistence } from "./paymentStatePersistence.js";
 import { type PaymentReconciliationScheduler } from "./reconciliation.js";
 import { ReceiptService } from "./receipt.js";
 import { InMemorySettlementStore, type SettlementStore } from "./settlementStore.js";
+import {
+  checkSettlementFeeCeiling,
+  feeCeilingExceededMessage,
+  resolveEffectiveFeeCeiling,
+  type EffectiveFeeCeiling,
+  type FeeCeilingDecision,
+  type FeeCeilingOverride,
+  type SettlementFeeQuote
+} from "./settlementFeeCeiling.js";
 import { type PaymentAuditLogger } from "./verification.js";
 import {
   type X402SettlementResult,
@@ -34,6 +43,17 @@ export type SettlementServiceOptions = {
   receiptService?: ReceiptService;
   statePersistence?: PaymentStatePersistence;
   reconciliationScheduler?: PaymentReconciliationScheduler;
+};
+
+export type SettlementSettleOptions = {
+  /**
+   * Explicit operator override for the fee ceiling, for this settlement
+   * only. Denied unless the deployment enables overrides
+   * (`STELLAR_FEE_CEILING_OVERRIDE_ENABLED`) and the override carries an
+   * operator identity and a reason. See
+   * docs/payments/settlement-fee-ceilings.md.
+   */
+  feeCeilingOverride?: FeeCeilingOverride;
 };
 
 export type SettlementServiceResult = {
@@ -89,7 +109,10 @@ export class SettlementService {
     this.reconciliationScheduler = options.reconciliationScheduler;
   }
 
-  async settle(input: unknown): Promise<SettlementServiceResult> {
+  async settle(
+    input: unknown,
+    options: SettlementSettleOptions = {}
+  ): Promise<SettlementServiceResult> {
     const parsedResult = settlePaymentRequestSchema.safeParse(input);
     if (!parsedResult.success) {
       throw new LumenError("INVALID_PAYMENT_PAYLOAD", "Settlement request is not valid x402 v2.", {
@@ -152,6 +175,13 @@ export class SettlementService {
       );
     }
 
+    // Fee ceiling gate: re-quote the fee from a fresh simulation and compare
+    // it against the configured ceiling immediately before signing. This
+    // runs after the fresh re-verification above and before settleExact,
+    // which is where the facilitator signs. On excess (or when the fee
+    // cannot be established) the payment is recorded as failed and signing
+    // never happens.
+    const feeDecision = await this.enforceFeeCeilingBeforeSigning(attempt, normalized, options);
     const adapterResult = await this.settleWithAdapter(normalized);
     if (
       adapterResult.status !== "confirmed" ||
@@ -197,13 +227,22 @@ export class SettlementService {
       metadata: {
         amount: settlement.amount,
         assetCode: settlement.assetCode,
+        feeCeilingOverridden: feeDecision.overridden,
+        feeCeilingStroops: feeDecision.ceilingStroops,
+        feeStroops: feeDecision.feeStroops,
         ledger: settlement.ledger,
         network: settlement.network,
         paymentAttemptId: attempt.id,
         receiptId: receipt.id,
         resourceId: attempt.resourceId,
         status: settlement.status,
-        transactionHash: settlement.transactionHash
+        transactionHash: settlement.transactionHash,
+        ...(feeDecision.overridden && feeDecision.override !== undefined
+          ? {
+              feeCeilingOverrideOperatorId: feeDecision.override.operatorId,
+              feeCeilingOverrideReason: feeDecision.override.reason
+            }
+          : {})
       }
     });
 
@@ -288,6 +327,134 @@ export class SettlementService {
     throw new LumenError("SETTLEMENT_FAILED", "Settlement is already in progress.", {
       statusCode: 409,
       details: { status: "settling" }
+    });
+  }
+
+  private async enforceFeeCeilingBeforeSigning(
+    attempt: PaymentAttempt,
+    normalized: NormalizedVerifyPaymentRequest,
+    options: SettlementSettleOptions
+  ): Promise<FeeCeilingDecision> {
+    let ceiling: EffectiveFeeCeiling;
+    try {
+      ceiling = resolveEffectiveFeeCeiling(this.config, options.feeCeilingOverride);
+    } catch (error) {
+      return this.recordFeeGateFailure(attempt, normalized, error);
+    }
+
+    let quote: SettlementFeeQuote;
+    try {
+      const quoteSettlementFee = this.adapter.quoteSettlementFee;
+      if (quoteSettlementFee === undefined) {
+        throw new LumenError(
+          "SETTLEMENT_FAILED",
+          "Settlement adapter cannot quote the settlement fee before signing.",
+          { details: { stage: "fee_ceiling", feeCheck: "quote_unavailable" } }
+        );
+      }
+      quote = await quoteSettlementFee({
+        paymentPayload: normalized.paymentPayload,
+        paymentRequirements: normalized.paymentRequirements,
+        normalizedRequest: normalized
+      });
+    } catch (error) {
+      return this.recordFeeGateFailure(attempt, normalized, error);
+    }
+
+    const decision = checkSettlementFeeCeiling({ quote, ceiling });
+    if (!decision.allowed) {
+      await this.auditFeeCeilingExceeded(attempt, normalized, decision);
+      return this.recordFailedSettlement(attempt, normalized, {
+        adapter: "@x402/stellar",
+        status: "failed",
+        failureCode: "FEE_CEILING_EXCEEDED",
+        failureReason: feeCeilingExceededMessage(decision.feeStroops, decision.ceilingStroops),
+        officialContext: {
+          stage: "fee_ceiling",
+          ceilingStroops: decision.ceilingStroops,
+          feeStroops: decision.feeStroops,
+          feeCeilingOverridden: decision.overridden,
+          ...(decision.overridden && decision.override !== undefined
+            ? { feeCeilingOverrideOperatorId: decision.override.operatorId }
+            : {})
+        }
+      });
+    }
+    return decision;
+  }
+
+  /**
+   * Record a pre-signing fee gate failure as a terminal, reconcilable
+   * failure: the attempt leaves "settling" for "failed" with the cause in
+   * its failure code and reason, and a failed settlement record is created
+   * with no transaction hash (nothing was signed or submitted, so there is
+   * nothing on-chain to reconcile). Used for rejected overrides and for
+   * fees that cannot be quoted; the fee-ceiling-exceeded case has its own
+   * recorder above so its audit event can carry the fee values.
+   */
+  private async recordFeeGateFailure(
+    attempt: PaymentAttempt,
+    normalized: NormalizedVerifyPaymentRequest,
+    error: unknown
+  ): Promise<never> {
+    const failure =
+      error instanceof LumenError
+        ? error
+        : new LumenError(
+            "SETTLEMENT_FAILED",
+            "Settlement fee could not be checked before signing.",
+            { details: { stage: "fee_ceiling", feeCheck: "quote_unavailable" } }
+          );
+    await this.auditLogService?.record({
+      action: "payment.settle.fee_check_failed",
+      actorId: attempt.sellerId,
+      actorType: "facilitator",
+      targetId: attempt.id,
+      targetType: "payment_attempt",
+      metadata: {
+        amount: normalized.amount,
+        assetCode: normalized.asset.code,
+        failureCode: failure.code,
+        network: normalized.network,
+        paymentAttemptId: attempt.id,
+        resourceId: attempt.resourceId
+      }
+    });
+    return this.recordFailedSettlement(attempt, normalized, {
+      adapter: "@x402/stellar",
+      status: "failed",
+      failureCode: failure.code,
+      failureReason: failure.message,
+      officialContext: { stage: "fee_ceiling", ...(failure.details ?? {}) }
+    });
+  }
+
+  private async auditFeeCeilingExceeded(
+    attempt: PaymentAttempt,
+    normalized: NormalizedVerifyPaymentRequest,
+    decision: Extract<FeeCeilingDecision, { allowed: false }>
+  ): Promise<void> {
+    await this.auditLogService?.record({
+      action: "payment.settle.fee_ceiling_exceeded",
+      actorId: attempt.sellerId,
+      actorType: "facilitator",
+      targetId: attempt.id,
+      targetType: "payment_attempt",
+      metadata: {
+        amount: normalized.amount,
+        assetCode: normalized.asset.code,
+        ceilingStroops: decision.ceilingStroops,
+        feeStroops: decision.feeStroops,
+        network: normalized.network,
+        paymentAttemptId: attempt.id,
+        resourceId: attempt.resourceId,
+        ...(decision.overridden && decision.override !== undefined
+          ? {
+              feeCeilingOverrideOperatorId: decision.override.operatorId,
+              feeCeilingOverrideReason: decision.override.reason
+            }
+          : {})
+      }
     });
   }
 

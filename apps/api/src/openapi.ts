@@ -3,18 +3,44 @@ import { getReleaseCommit, serviceName } from "@lumenbazaar/shared";
 type HttpMethod = "get" | "post" | "patch" | "delete";
 type SchemaObject = Record<string, unknown>;
 
+type RouteParameter = {
+  name: string;
+  in: "query";
+  required?: boolean;
+  description: string;
+  schema: SchemaObject;
+};
+
 type RouteContract = {
   method: HttpMethod;
   path: string;
   operationId: string;
   summary: string;
   tags: string[];
+  parameters?: RouteParameter[];
   requestBody?: SchemaObject;
   requestBodyRequired?: boolean;
   response: SchemaObject;
   responseMediaType?: string;
+  /** Optional operation parameters (e.g. headers) rendered into the spec. */
+  parameters?: Array<Record<string, unknown>>;
+  /**
+   * Set for mutations guarded by optimistic concurrency: documents the 409
+   * RESOURCE_VERSION_CONFLICT response for a stale expected version.
+   */
+  versionConflict?: boolean;
   /** Optional schema for a 503 Service Unavailable response (e.g. readiness endpoint). */
   degradedResponse?: SchemaObject;
+  /**
+   * Public catalog GET: the response carries a strong ETag derived from the
+   * representation and honours If-None-Match with a 304 (RFC 9110).
+   */
+  conditionalGet?: boolean;
+  /**
+   * Authorization-specific GET: the response varies by credentials, so it
+   * carries no shared validator and is marked private, no-store.
+   */
+  privateResponse?: boolean;
 };
 
 const jsonObject: SchemaObject = {
@@ -65,13 +91,27 @@ const readinessResponse: SchemaObject = {
     environment: { type: "string", enum: ["local", "testnet", "staging", "mainnet"] },
     checks: {
       type: "object",
-      required: ["database", "redis", "stellarRpc", "horizon", "signer", "migrations", "assets"],
+      required: [
+        "database",
+        "redis",
+        "stellarRpc",
+        "horizon",
+        "signer",
+        "secretProviders",
+        "migrations",
+        "assets"
+      ],
       properties: {
         database: readinessCheck,
         redis: readinessCheck,
         stellarRpc: readinessCheck,
         horizon: readinessCheck,
         signer: readinessCheck,
+        secretProviders: {
+          ...readinessCheck,
+          description:
+            "Startup secret-provider health checks (facilitator signer, event-stream signing secret). `not_required` when no secret providers are configured; `unavailable` with a stable failure reason code when any configured provider failed its startup check."
+        },
         migrations: readinessCheck,
         assets: readinessCheck
       }
@@ -132,6 +172,90 @@ const rateLimitHeaders: Record<string, unknown> = {
     description:
       "Number of seconds to wait before retrying. Only present in 429 responses. Per RFC 6585.",
     schema: { type: "integer", minimum: 1 }
+  }
+};
+
+const networkQueryParameter: RouteParameter = {
+  name: "network",
+  in: "query",
+  description: "Stellar network the resource settles on.",
+  schema: { type: "string", enum: ["stellar:testnet", "stellar:pubnet"] }
+};
+
+const assetQueryParameter: RouteParameter = {
+  name: "asset",
+  in: "query",
+  description: "Asset code the resource accepts (for example, USDC).",
+  schema: { type: "string" }
+};
+
+const resourceTypeQueryParameter: RouteParameter = {
+  name: "type",
+  in: "query",
+  description: "Resource type.",
+  schema: { type: "string", enum: ["http", "mcp"] }
+};
+
+const sellerIdQueryParameter: RouteParameter = {
+  name: "sellerId",
+  in: "query",
+  description: "Only return resources owned by this seller.",
+  schema: { type: "string" }
+};
+
+const cursorQueryParameter: RouteParameter = {
+  name: "cursor",
+  in: "query",
+  description:
+    "Opaque pagination cursor from a previous response. Paging stops at the maximum result window of 1000 results; a cursor at or beyond that depth is rejected with RESULT_WINDOW_EXCEEDED.",
+  schema: { type: "string" }
+};
+
+const limitQueryParameter: RouteParameter = {
+  name: "limit",
+  in: "query",
+  description:
+    "Maximum results per page. Default 25, maximum 100. A larger value is rejected with PAGE_SIZE_EXCEEDED before any database work runs. Counts toward the search query cost budget (1 per block of 10 results).",
+  schema: { type: "integer", minimum: 1, maximum: 100, default: 25 }
+const etagHeader: Record<string, unknown> = {
+  description:
+    "Strong ETag for the response representation: SHA-256 of the canonical JSON body, quoted per RFC 9110. Changes whenever the represented data changes.",
+  schema: { type: "string" }
+};
+
+const publicCacheControlHeader: Record<string, unknown> = {
+  description:
+    "Cache-Control for a public catalog representation: public, max-age=60. Shared caches may store it for up to 60 seconds.",
+  schema: { type: "string" }
+};
+
+const privateCacheControlHeader: Record<string, unknown> = {
+  description:
+    "Cache-Control for an authorization-specific response: private, no-store. The response varies by credentials and must not be stored by shared caches.",
+  schema: { type: "string" }
+};
+
+const varyApiKeyHeader: Record<string, unknown> = {
+  description:
+    "Vary: X-Api-Key. The response depends on the seller API key presented, so caches must not share it across credentials.",
+  schema: { type: "string" }
+};
+
+const ifNoneMatchParameter: Record<string, unknown> = {
+  name: "If-None-Match",
+  in: "header",
+  required: false,
+  description:
+    'Conditional request (RFC 9110): one or more ETags, `*`, or a weak tag (`W/"..."`). When the current representation matches, the server returns 304 Not Modified with no body.',
+  schema: { type: "string" }
+};
+
+const notModifiedResponse: Record<string, unknown> = {
+  description:
+    "Not Modified. The representation has not changed since the ETag supplied in If-None-Match. The response has no body; ETag and Cache-Control are repeated.",
+  headers: {
+    etag: etagHeader,
+    "cache-control": publicCacheControlHeader
   }
 };
 
@@ -196,6 +320,12 @@ const resource: SchemaObject = {
     outputSchema: jsonObject,
     extensions: jsonObject,
     status: { type: "string", enum: ["draft", "active", "inactive"] },
+    version: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Optimistic-concurrency version. Starts at 1 and increments atomically on every update, delete, or rollback. Mutations must supply the version they read, in the If-Match header or the version request field; a stale version is rejected with 409 RESOURCE_VERSION_CONFLICT."
+    },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" }
   }
@@ -218,6 +348,38 @@ const resourceVersionList: SchemaObject = {
   required: ["versions"],
   properties: {
     versions: { type: "array", items: resourceVersion }
+  }
+};
+
+/**
+ * Optimistic-concurrency precondition for resource mutations (issue #102).
+ * The caller sends the resource `version` it read; the mutation applies
+ * only while the stored version still matches. The same version may also be
+ * sent as the `version` field of an update body; the header wins if both
+ * are sent. A missing precondition is rejected; a stale one returns 409
+ * RESOURCE_VERSION_CONFLICT with expectedVersion and currentVersion.
+ */
+const ifMatchParameter: Record<string, unknown> = {
+  name: "If-Match",
+  in: "header",
+  required: true,
+  description:
+    'Expected current resource version, as a bare integer (If-Match: 3) or a quoted strong entity tag (If-Match: "3").',
+  schema: { type: "string", pattern: '^"?[1-9][0-9]*"?$' }
+};
+
+const updateResourceRequest: SchemaObject = {
+  type: "object",
+  description:
+    "Partial resource fields to update, plus the optimistic-concurrency precondition. Every field except version is optional; version is the expected current resource version and is required unless If-Match is sent.",
+  properties: {
+    ...(resource.properties as Record<string, unknown>),
+    version: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Expected current resource version. Required unless the If-Match header is sent; the header wins when both are sent."
+    }
   }
 };
 
@@ -285,7 +447,12 @@ const paymentPayload: SchemaObject = {
         transaction: {
           type: "string",
           contentEncoding: "base64",
-          description: "Wallet-signed Stellar transaction envelope XDR."
+          description:
+            "Wallet-signed Stellar transaction envelope XDR. The transaction memo and payment " +
+            "destinations must satisfy the memo and muxed-account policy: memo types none, text " +
+            "(at most 28 bytes), id (uint64), hash and return (32 bytes) are accepted with a " +
+            "G-address destination; muxed-account (M...) and contract (C...) destinations are " +
+            "rejected with every memo type (error UNSUPPORTED_MEMO_OR_MUXED_ACCOUNT)."
         }
       }
     },
@@ -650,7 +817,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/verify",
     operationId: "verifyPayment",
-    summary: "Verify an exact Stellar x402 payment payload.",
+    summary:
+      "Verify an exact Stellar x402 payment payload. The transaction memo and payment destinations are checked against the memo and muxed-account policy before verification.",
     tags: ["facilitator"],
     requestBody: verificationRequest,
     response: verificationResponse
@@ -659,7 +827,8 @@ export const apiRouteContracts: RouteContract[] = [
     method: "post",
     path: "/v1/settle",
     operationId: "settlePayment",
-    summary: "Settle a previously verified exact Stellar x402 payment.",
+    summary:
+      "Settle a previously verified exact Stellar x402 payment. The transaction memo and payment destinations are checked against the memo and muxed-account policy before settlement.",
     tags: ["facilitator"],
     requestBody: {
       type: "object",
@@ -860,6 +1029,7 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "listResources",
     summary: "List catalog resources.",
     tags: ["resources"],
+    conditionalGet: true,
     response: {
       type: "object",
       required: ["resources", "nextCursor"],
@@ -887,23 +1057,30 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "getResource",
     summary: "Fetch a paid resource by ID.",
     tags: ["resources"],
+    conditionalGet: true,
     response: resource
   },
   {
     method: "patch",
     path: "/v1/resources/{id}",
     operationId: "updateResource",
-    summary: "Update mutable paid resource fields.",
+    summary:
+      "Update mutable paid resource fields. Requires an optimistic-concurrency precondition: the version read, in the If-Match header or the version body field. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
     tags: ["resources"],
-    requestBody: resource,
+    parameters: [ifMatchParameter],
+    versionConflict: true,
+    requestBody: updateResourceRequest,
     response: resource
   },
   {
     method: "delete",
     path: "/v1/resources/{id}",
     operationId: "deleteResource",
-    summary: "Deactivate a paid resource.",
+    summary:
+      "Deactivate a paid resource. Requires an optimistic-concurrency precondition: the version read, in the If-Match header. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
     tags: ["resources"],
+    parameters: [ifMatchParameter],
+    versionConflict: true,
     response: resource
   },
   {
@@ -912,6 +1089,7 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "listResourceVersions",
     summary: "List the immutable version history of a resource.",
     tags: ["resources"],
+    privateResponse: true,
     response: resourceVersionList
   },
   {
@@ -920,14 +1098,18 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "getResourceVersion",
     summary: "Fetch a specific historical version of a resource.",
     tags: ["resources"],
+    privateResponse: true,
     response: resourceVersion
   },
   {
     method: "post",
     path: "/v1/resources/{id}/rollback",
     operationId: "rollbackResource",
-    summary: "Roll back a resource to a historical version, creating a new immutable version.",
+    summary:
+      "Roll back a resource to a historical version, creating a new immutable version. Requires an optimistic-concurrency precondition: the version read, in the If-Match header. A stale version returns 409 RESOURCE_VERSION_CONFLICT.",
     tags: ["resources"],
+    parameters: [ifMatchParameter],
+    versionConflict: true,
     requestBody: rollbackResourceRequest,
     response: rollbackResourceResponse
   },
@@ -937,6 +1119,7 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "listSellerResources",
     summary: "List resources owned by a seller.",
     tags: ["resources"],
+    privateResponse: true,
     response: jsonObject
   },
   {
@@ -945,14 +1128,58 @@ export const apiRouteContracts: RouteContract[] = [
     operationId: "browseDiscoveryResources",
     summary: "Browse discoverable paid resources.",
     tags: ["discovery"],
+    parameters: [
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      {
+        name: "minPrice",
+        in: "query",
+        description: "Only return resources priced at or above this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "maxPrice",
+        in: "query",
+        description: "Only return resources priced at or below this amount.",
+        schema: { type: "string" }
+      },
+      {
+        name: "extension",
+        in: "query",
+        description: "Only return resources carrying this extension key.",
+        schema: { type: "string" }
+      },
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
+    conditionalGet: true,
     response: jsonObject
   },
   {
     method: "get",
     path: "/v1/discovery/search",
     operationId: "searchDiscoveryResources",
-    summary: "Search paid resources by query and filters.",
+    summary:
+      "Search paid resources by query and filters. Queries are scored against a deterministic cost budget (maximum 50) before execution; over-budget queries are rejected with QUERY_TOO_COMPLEX. See docs/api/search-query-limits.md.",
     tags: ["discovery"],
+    parameters: [
+      {
+        name: "q",
+        in: "query",
+        description:
+          "Free-text query. Maximum 200 characters and 20 terms; each term costs 2 against the query cost budget.",
+        schema: { type: "string", maxLength: 200 }
+      },
+      networkQueryParameter,
+      assetQueryParameter,
+      resourceTypeQueryParameter,
+      sellerIdQueryParameter,
+      cursorQueryParameter,
+      limitQueryParameter
+    ],
+    conditionalGet: true,
     response: jsonObject
   },
   {
@@ -1042,10 +1269,28 @@ export function buildOpenApiSpec(
 
   for (const contract of apiRouteContracts) {
     const pathItem = (paths[contract.path] ??= {});
+    const responseHeaders: Record<string, unknown> = {
+      ...rateLimitHeaders,
+      ...(contract.conditionalGet === true
+        ? { etag: etagHeader, "cache-control": publicCacheControlHeader }
+        : {}),
+      ...(contract.privateResponse === true
+        ? { "cache-control": privateCacheControlHeader, vary: varyApiKeyHeader }
+        : {})
+    };
     pathItem[contract.method] = {
       operationId: contract.operationId,
       summary: contract.summary,
       tags: contract.tags,
+      ...(contract.parameters === undefined ? {} : { parameters: contract.parameters }),
+      ...(contract.parameters === undefined && contract.conditionalGet !== true
+        ? {}
+        : {
+            parameters: [
+              ...(contract.parameters ?? []),
+              ...(contract.conditionalGet === true ? [ifNoneMatchParameter] : [])
+            ]
+          }),
       ...(contract.requestBody === undefined
         ? {}
         : {
@@ -1064,13 +1309,28 @@ export function buildOpenApiSpec(
             contract.responseMediaType === "text/event-stream"
               ? "Server-sent event stream"
               : "Successful response",
-          headers: rateLimitHeaders,
+          headers: responseHeaders,
           content: {
             [contract.responseMediaType ?? "application/json"]: {
               schema: contract.response
             }
           }
         },
+        ...(contract.conditionalGet === true ? { "304": notModifiedResponse } : {}),
+        ...(contract.versionConflict === undefined
+          ? {}
+          : {
+              "409": {
+                description:
+                  "Version conflict. The resource was modified by another writer after the version the caller read. The error body uses code RESOURCE_VERSION_CONFLICT and carries expectedVersion and currentVersion in details; re-read the resource and retry with the current version.",
+                headers: rateLimitHeaders,
+                content: {
+                  "application/json": {
+                    schema: errorResponse
+                  }
+                }
+              }
+            }),
         ...(contract.degradedResponse === undefined
           ? {}
           : {
@@ -1165,7 +1425,10 @@ export function buildOpenApiSpec(
         "X-RateLimit-Limit": rateLimitHeaders["x-ratelimit-limit"],
         "X-RateLimit-Remaining": rateLimitHeaders["x-ratelimit-remaining"],
         "X-RateLimit-Reset": rateLimitHeaders["x-ratelimit-reset"],
-        "Retry-After": rateLimitHeaders["retry-after"]
+        "Retry-After": rateLimitHeaders["retry-after"],
+        ETag: etagHeader,
+        "Cache-Control": publicCacheControlHeader,
+        Vary: varyApiKeyHeader
       }
     },
     "x-docs-consumption": {
@@ -1219,6 +1482,20 @@ export function renderOpenApiMarkdown(spec: ReturnType<typeof buildOpenApiSpec> 
   }
 
   lines.push(
+    "",
+    "## Conditional requests",
+    "",
+    "Public catalog reads (`GET /v1/resources`, `GET /v1/resources/{id}`, `GET /v1/discovery/resources`, " +
+      "`GET /v1/discovery/search`) return a strong `ETag` (SHA-256 of the canonical response body) and " +
+      "`Cache-Control: public, max-age=60`. Send the ETag back in `If-None-Match` (including `*` or a weak " +
+      '`W/"..."` tag, or several tags) and the server returns `304 Not Modified` with no body, repeating the ' +
+      "`ETag` and `Cache-Control` headers, when the representation is unchanged. The ETag changes whenever the " +
+      "represented data changes.",
+    "",
+    "Authorization-specific reads (`GET /v1/resources/{id}/versions`, " +
+      "`GET /v1/resources/{id}/versions/{version}`, `GET /v1/sellers/{sellerId}/resources`) carry no ETag " +
+      "and return `Cache-Control: private, no-store` with `Vary: X-Api-Key`, so shared caches never store or " +
+      "share a response that varies by credentials.",
     "",
     "## Docs Repo Consumption",
     "",
