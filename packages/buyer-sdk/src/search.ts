@@ -61,6 +61,7 @@ export async function searchResources(
     method: "GET"
   });
 
+  if (response.status === 410) throw new SearchSnapshotExpired();
   if (!response.ok) {
     // Surface the API's actionable error (code, message, details) when the
     // server rejected the query, e.g. QUERY_TOO_COMPLEX or PAGE_SIZE_EXCEEDED.
@@ -129,4 +130,12 @@ export async function searchHttpEndpoints(apiUrl: string, query?: string): Promi
     filters.q = query;
   }
   return searchResources(apiUrl, filters);
+}
+
+export class SearchSnapshotExpired extends Error {
+  readonly code = "SEARCH_SNAPSHOT_EXPIRED";
+  readonly restart = true;
+  constructor() {
+    super("Search snapshot expired; restart without a cursor.");
+  }
 }
