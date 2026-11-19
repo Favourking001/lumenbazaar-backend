@@ -18,7 +18,8 @@ describe("loadConfig", () => {
       maxTransactionFeeStroops: 50_000,
       inclusionFeeStroops: 100,
       feeCeilingStroops: 50_000,
-      feeCeilingOverrideEnabled: false
+      feeCeilingOverrideEnabled: false,
+      horizonTraversal: { maxPages: 100, maxRecords: 1000, maxDurationMs: 30_000 }
     });
     expect(config.networks["stellar:testnet"].passphrase).toContain("Test SDF Network");
     expect(config.networks["stellar:testnet"].assets[0]).toMatchObject({
@@ -77,6 +78,22 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ STELLAR_FEE_CEILING_OVERRIDE_ENABLED: "1" }).settlement.feeCeilingOverrideEnabled
     ).toBe(true);
+  });
+
+  it("defaults Horizon traversal budgets and accepts explicit overrides", () => {
+    expect(loadConfig({}).settlement.horizonTraversal).toEqual({
+      maxPages: 100,
+      maxRecords: 1000,
+      maxDurationMs: 30_000
+    });
+    expect(
+      loadConfig({
+        HORIZON_TRAVERSAL_MAX_PAGES: "5",
+        HORIZON_TRAVERSAL_MAX_RECORDS: "50",
+        HORIZON_TRAVERSAL_MAX_DURATION_MS: "5000"
+      }).settlement.horizonTraversal
+    ).toEqual({ maxPages: 5, maxRecords: 50, maxDurationMs: 5000 });
+    expect(() => loadConfig({ HORIZON_TRAVERSAL_MAX_PAGES: "0" })).toThrow(ZodError);
   });
 
   it("fails closed for mainnet without an explicit pubnet USDC issuer", () => {

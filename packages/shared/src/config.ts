@@ -144,7 +144,15 @@ export const envSchema = z.object({
    * and the settlement call supplies an override with an operator identity
    * and a reason.
    */
-  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false)
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: booleanEnv.default(false),
+  /**
+   * Horizon history traversal budgets (see
+   * docs/payments/horizon-pagination-exhaustion-guard.md). Each bounds one
+   * traversal; exceeding a bound stops it cleanly with a resumable cursor.
+   */
+  HORIZON_TRAVERSAL_MAX_PAGES: z.coerce.number().int().positive().default(100),
+  HORIZON_TRAVERSAL_MAX_RECORDS: z.coerce.number().int().positive().default(1000),
+  HORIZON_TRAVERSAL_MAX_DURATION_MS: z.coerce.number().int().positive().default(30_000)
 });
 
 export type RawEnv = z.input<typeof envSchema>;
@@ -474,6 +482,38 @@ export const configKeyMetadata: Record<keyof RawEnv, ConfigKeyMetadata> = {
     section: "settlement",
     description: "Inclusion fee bid in stroops for settlement transactions.",
     notes: "Must not exceed STELLAR_MAX_TRANSACTION_FEE_STROOPS."
+  },
+  STELLAR_FEE_CEILING_STROOPS: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Repo-enforced settlement fee ceiling in stroops, checked before signing.",
+    notes: "Defaults to STELLAR_MAX_TRANSACTION_FEE_STROOPS when unset; must never exceed it."
+  },
+  STELLAR_FEE_CEILING_OVERRIDE_ENABLED: {
+    owner: "api, stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Deployment-level gate for per-settlement fee ceiling overrides.",
+    notes: "Default deny: overrides are honoured only when explicitly true."
+  },
+  HORIZON_TRAVERSAL_MAX_PAGES: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum Horizon history pages fetched in one traversal before it stops."
+  },
+  HORIZON_TRAVERSAL_MAX_RECORDS: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum unique Horizon history records returned in one traversal before it stops."
+  },
+  HORIZON_TRAVERSAL_MAX_DURATION_MS: {
+    owner: "stellar-payments",
+    sensitivity: "non-secret",
+    section: "settlement",
+    description: "Maximum wall-clock duration in milliseconds of one Horizon history traversal."
   }
 };
 
@@ -509,6 +549,11 @@ export type AppConfig = {
     inclusionFeeStroops: number;
     feeCeilingStroops: number;
     feeCeilingOverrideEnabled: boolean;
+    horizonTraversal: {
+      maxPages: number;
+      maxRecords: number;
+      maxDurationMs: number;
+    };
   };
   eventStreams: {
     signingSecret: string | undefined;
@@ -644,7 +689,12 @@ export function loadConfig(
       maxTransactionFeeStroops: env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
       inclusionFeeStroops: env.STELLAR_INCLUSION_FEE_STROOPS,
       feeCeilingStroops: env.STELLAR_FEE_CEILING_STROOPS ?? env.STELLAR_MAX_TRANSACTION_FEE_STROOPS,
-      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED
+      feeCeilingOverrideEnabled: env.STELLAR_FEE_CEILING_OVERRIDE_ENABLED,
+      horizonTraversal: {
+        maxPages: env.HORIZON_TRAVERSAL_MAX_PAGES,
+        maxRecords: env.HORIZON_TRAVERSAL_MAX_RECORDS,
+        maxDurationMs: env.HORIZON_TRAVERSAL_MAX_DURATION_MS
+      }
     },
     eventStreams: {
       signingSecret: env.EVENT_STREAM_SIGNING_SECRET
