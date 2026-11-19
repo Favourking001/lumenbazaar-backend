@@ -5,6 +5,7 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 
 import {
+  canonicalResourceUrl,
   appendPrivilegedAudit,
   type MutationActor,
   decodeCursor,
@@ -490,6 +491,8 @@ export function createCatalogPersistence(config: AppConfig) {
 function resourceCreateData(input: CreateResourceInput): Prisma.ResourceUncheckedCreateInput {
   return {
     ...input,
+    url: canonicalResourceUrl(input.url),
+    displayUrl: input.displayUrl ?? input.url,
     amount: input.amount,
     inputSchema: json(input.inputSchema as JsonObject),
     outputSchema: json(input.outputSchema as JsonObject),
@@ -504,6 +507,19 @@ function resourceUpdateData(input: UpdateResourceInput): Prisma.ResourceUnchecke
   const patch = { ...input };
   delete patch.version;
   return {
+    ...(input.type === undefined ? {} : { type: input.type }),
+    ...(input.name === undefined ? {} : { name: input.name }),
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(input.url === undefined
+      ? {}
+      : { url: canonicalResourceUrl(input.url), displayUrl: input.displayUrl ?? input.url }),
+    ...(input.routeTemplate === undefined ? {} : { routeTemplate: input.routeTemplate }),
+    ...(input.network === undefined ? {} : { network: input.network }),
+    ...(input.payTo === undefined ? {} : { payTo: input.payTo }),
+    ...(input.assetCode === undefined ? {} : { assetCode: input.assetCode }),
+    ...(input.assetIssuer === undefined ? {} : { assetIssuer: input.assetIssuer }),
+    ...(input.amount === undefined ? {} : { amount: input.amount }),
+    ...(input.inputSchema === undefined
     ...(patch.type === undefined ? {} : { type: patch.type }),
     ...(patch.name === undefined ? {} : { name: patch.name }),
     ...(patch.description === undefined ? {} : { description: patch.description }),

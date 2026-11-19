@@ -21,4 +21,5 @@ export * from "./routeTemplates.js";
 export * from "./sellerApiKeys.js";
 export * from "./webhooks.js";
 
+export * from "./resourceUrl.js";
 export * from "./db/privilegedAudit.js";

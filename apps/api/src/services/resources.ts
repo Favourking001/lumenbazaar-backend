@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   LumenError,
+  canonicalResourceUrl,
   type MutationActor,
   type AppConfig,
   type JsonObject,
@@ -36,6 +37,7 @@ export const createResourceSchema = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().min(1).max(2000),
   url: z.string().url(),
+  displayUrl: z.string().nullable().optional(),
   routeTemplate: z.string().min(1),
   network: z.enum(["stellar:testnet", "stellar:pubnet"]),
   payTo: z.string().min(1),
@@ -132,7 +134,8 @@ export class InMemoryResourceStore implements ResourceStore {
       type: input.type,
       name: input.name,
       description: input.description,
-      url: input.url,
+      url: canonicalResourceUrl(input.url),
+      displayUrl: input.displayUrl ?? input.url,
       routeTemplate: input.routeTemplate,
       network: input.network,
       payTo: input.payTo,
@@ -182,7 +185,8 @@ export class InMemoryResourceStore implements ResourceStore {
       type: input.type ?? existing.type,
       name: input.name ?? existing.name,
       description: input.description ?? existing.description,
-      url: input.url ?? existing.url,
+      url: input.url === undefined ? existing.url : canonicalResourceUrl(input.url),
+      displayUrl: input.displayUrl ?? input.url ?? existing.displayUrl,
       routeTemplate: input.routeTemplate ?? existing.routeTemplate,
       network: input.network ?? existing.network,
       payTo: input.payTo ?? existing.payTo,
@@ -285,6 +289,9 @@ export class InMemoryResourceStore implements ResourceStore {
     assertExpectedVersion(existing, options);
     const updated: Resource = {
       ...existing,
+      ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
+      url: canonicalResourceUrl(patch.url ?? existing.url),
+      displayUrl: patch.displayUrl ?? patch.url ?? existing.displayUrl ?? existing.url,
       ...patch,
       version: existing.version + 1,
       updatedAt: new Date().toISOString()
@@ -550,6 +557,8 @@ function normalizeResourceInput<T extends CreateResourceInput | (Resource & Upda
 
   return {
     ...input,
+    url: canonicalResourceUrl(input.url),
+    displayUrl: input.displayUrl ?? input.url,
     amount,
     assetCode
   };
@@ -717,6 +726,7 @@ function mergeResourcePatch(existing: Resource, patch: UpdateResourceInput): Res
     name: patch.name ?? existing.name,
     description: patch.description ?? existing.description,
     url: patch.url ?? existing.url,
+    displayUrl: patch.url ?? existing.displayUrl ?? existing.url,
     routeTemplate: patch.routeTemplate ?? existing.routeTemplate,
     network: patch.network ?? existing.network,
     payTo: patch.payTo ?? existing.payTo,
