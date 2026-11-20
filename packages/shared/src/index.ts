@@ -30,3 +30,4 @@ export * from "./ssrfProtection.js";
 export * from "./resourceUrl.js";
 export * from "./db/privilegedAudit.js";
 export * from "./restorationPolicy.js";
+export * from "./compressionPolicy.js";
